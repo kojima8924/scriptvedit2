@@ -15,25 +15,40 @@ bg.py          ... 背景レイヤー
 onigiri.py     ... 素材レイヤー
 ```
 
-### 演算子によるチェーン記法
+### 演算子によるDSL
 
-- `|` (パイプ) ... Transform（静的な空間変換: リサイズ、配置）
-- `&` (アンド) ... Effect（時間アニメーション: スケール、フェード）
+- `|` (パイプ) ... Transform同士を連結して TransformChain を生成
+- `&` (アンド) ... Effect同士を連結して EffectChain を生成
+- `<=` (適用) ... Object に TransformChain / EffectChain を適用
 
 ```python
-obj | resize(sx=0.3, sy=0.3) | pos(x=0.5, y=0.5, anchor="center")
-obj.time(6) & scale(1.5) & fade(alpha=0)
+obj <= resize(sx=0.3, sy=0.3) | pos(x=0.5, y=0.5, anchor="center")
+obj <= scale(1.5) & fade(alpha=0)
 ```
 
 ### Transformは静的、Effectはアニメーション
 
-- **Transform** (`|`): 1回だけ適用される空間変換
+- **Transform** (`|` で連結、`<=` で適用): 1回だけ適用される空間変換
   - `resize(sx, sy)` ... サイズ変更
   - `pos(x, y, anchor)` ... 配置位置
 
-- **Effect** (`&`): float引数が表示時間内で **指定値 → 1.0** に線形変化
+- **Effect** (`&` で連結、`<=` で適用): float引数が表示時間内で **指定値 → 1.0** に線形変化
   - `scale(1.5)` ... 1.5倍 → 等倍にアニメーション
   - `fade(alpha=0)` ... 透明 → 不透明にアニメーション
+
+### プリセット
+
+TransformChain / EffectChain を変数に保存して再利用可能。
+
+```python
+preset_t = resize(sx=0.3, sy=0.3) | pos(x=0.3, y=0.7, anchor="center")
+preset_e = scale(0.5) & fade(alpha=0)
+
+obj = Object("image.png")
+obj.time(6)
+obj <= preset_t
+obj <= preset_e
+```
 
 ### レイヤーの独立タイムライン
 
@@ -67,8 +82,9 @@ p.render("output.mp4")
 from scriptvedit import *
 
 bg = Object("bg_pattern_ishigaki.jpg")
-bg | resize(sx=1, sy=1) | pos(x=0.5, y=0.5, anchor="center")
-bg.time(6) & scale(1.5) & fade(alpha=0)
+bg.time(6)
+bg <= resize(sx=1, sy=1) | pos(x=0.5, y=0.5, anchor="center")
+bg <= scale(1.5) & fade(alpha=0)
 ```
 
 ### 実行

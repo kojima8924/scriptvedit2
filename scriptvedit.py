@@ -81,7 +81,7 @@ class Project:
             # オブジェクトごとのフィルタチェーン構築
             obj_filters = []
 
-            # Transform処理
+            # Transform処理（posを除く）
             for t in obj.transforms:
                 if t.name == "resize":
                     sx = t.params.get("sx", 1)
@@ -115,20 +115,19 @@ class Project:
             else:
                 obj_label = f"[{input_idx}:v]"
 
-            # overlay位置の決定
+            # overlay位置の決定（Object._posから取得）
             x_expr = "(W-w)/2"
             y_expr = "(H-h)/2"
-            for t in obj.transforms:
-                if t.name == "pos":
-                    x = t.params.get("x", 0.5)
-                    y = t.params.get("y", 0.5)
-                    anchor = t.params.get("anchor", "topleft")
-                    if anchor == "center":
-                        x_expr = f"W*{x}-w/2"
-                        y_expr = f"H*{y}-h/2"
-                    else:
-                        x_expr = f"W*{x}"
-                        y_expr = f"H*{y}"
+            if obj._pos is not None:
+                x = obj._pos.get("x", 0.5)
+                y = obj._pos.get("y", 0.5)
+                anchor = obj._pos.get("anchor", "topleft")
+                if anchor == "center":
+                    x_expr = f"W*{x}-w/2"
+                    y_expr = f"H*{y}-h/2"
+                else:
+                    x_expr = f"W*{x}"
+                    y_expr = f"H*{y}"
 
             # 時間制御: enable='between(t,start,end)'
             enable_str = ""
@@ -161,39 +160,46 @@ class Project:
 
 
 class TransformChain:
-    """複数のTransformをまとめたプリセット"""
+    """複数のTransformをまとめたチェーン"""
     def __init__(self, transforms):
         self.transforms = list(transforms)
 
     def __or__(self, other):
+        """TransformChain | Transform/TransformChain → TransformChain"""
         if isinstance(other, Transform):
             return TransformChain(self.transforms + [other])
         if isinstance(other, TransformChain):
             return TransformChain(self.transforms + other.transforms)
         return NotImplemented
 
+    def __repr__(self):
+        return f"TransformChain({self.transforms})"
+
 
 class EffectChain:
-    """複数のEffectをまとめたプリセット"""
+    """複数のEffectをまとめたチェーン"""
     def __init__(self, effects):
         self.effects = list(effects)
 
     def __and__(self, other):
+        """EffectChain & Effect/EffectChain → EffectChain"""
         if isinstance(other, Effect):
             return EffectChain(self.effects + [other])
         if isinstance(other, EffectChain):
             return EffectChain(self.effects + other.effects)
         return NotImplemented
 
+    def __repr__(self):
+        return f"EffectChain({self.effects})"
+
 
 class Transform:
-    def __init__(self, name, target=None, **params):
+    def __init__(self, name, **params):
         self.name = name
-        self.target = target
         self.params = params
 
     def __or__(self, other):
-        """Transform | Transform → TransformChain"""
+        """Transform | Transform/TransformChain → TransformChain"""
         if isinstance(other, Transform):
             return TransformChain([self, other])
         if isinstance(other, TransformChain):
@@ -210,7 +216,7 @@ class Effect:
         self.params = params
 
     def __and__(self, other):
-        """Effect & Effect → EffectChain"""
+        """Effect & Effect/EffectChain → EffectChain"""
         if isinstance(other, Effect):
             return EffectChain([self, other])
         if isinstance(other, EffectChain):
@@ -224,11 +230,12 @@ class Effect:
 class Object:
     def __init__(self, source):
         self.source = source
-        self.transforms = []
+        self.transforms = []  # pos以外のTransformリスト
         self.effects = []
         self.duration = None
         self.start_time = 0
         self.priority = 0
+        self._pos = None  # pos Transformの params を保持
         # 現在のProjectに自動登録
         if Project._current is not None:
             Project._current.objects.append(self)
@@ -238,34 +245,40 @@ class Object:
         self.duration = duration
         return self
 
-    def __or__(self, other):
-        """| 演算子: Transform / TransformChainを適用"""
-        if isinstance(other, Transform):
-            self.transforms.append(other)
-        elif isinstance(other, TransformChain):
-            self.transforms.extend(other.transforms)
+    def __le__(self, rhs):
+        """<= 演算子: Transform/TransformChain/Effect/EffectChainを適用"""
+        if isinstance(rhs, Transform):
+            self._apply_transform(rhs)
+        elif isinstance(rhs, TransformChain):
+            for t in rhs.transforms:
+                self._apply_transform(t)
+        elif isinstance(rhs, Effect):
+            self.effects.append(rhs)
+        elif isinstance(rhs, EffectChain):
+            self.effects.extend(rhs.effects)
+        else:
+            raise TypeError(f"Object <= に渡せるのは Transform/TransformChain/Effect/EffectChain のみ: {type(rhs)}")
         return self
 
-    def __and__(self, other):
-        """& 演算子: Effect / EffectChainを適用"""
-        if isinstance(other, Effect):
-            self.effects.append(other)
-        elif isinstance(other, EffectChain):
-            self.effects.extend(other.effects)
-        return self
+    def _apply_transform(self, t):
+        """Transformを適用。posならば_posに保存、それ以外はtransformsに追加"""
+        if t.name == "pos":
+            self._pos = dict(t.params)
+        else:
+            self.transforms.append(t)
 
     def __repr__(self):
-        return f"Object({self.source}, transforms={self.transforms}, effects={self.effects})"
+        return f"Object({self.source}, transforms={self.transforms}, effects={self.effects}, pos={self._pos})"
 
 
 # --- Transform関数 ---
 
-def resize(target=None, **kwargs):
-    return Transform("resize", target=target, **kwargs)
+def resize(**kwargs):
+    return Transform("resize", **kwargs)
 
 
-def pos(target=None, **kwargs):
-    return Transform("pos", target=target, **kwargs)
+def pos(**kwargs):
+    return Transform("pos", **kwargs)
 
 
 # --- Effect関数 ---
