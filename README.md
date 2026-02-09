@@ -22,32 +22,59 @@ onigiri.py     ... 素材レイヤー
 - `<=` (適用) ... Object に TransformChain / EffectChain を適用
 
 ```python
-obj <= resize(sx=0.3, sy=0.3) | pos(x=0.5, y=0.5, anchor="center")
-obj <= scale(1.5) & fade(alpha=0)
+obj <= resize(sx=0.3, sy=0.3)
+obj.time(6) <= move(x=0.5, y=0.5, anchor="center") & scale(1.5) & fade(alpha=0)
 ```
 
 ### Transformは静的、Effectはアニメーション
 
 - **Transform** (`|` で連結、`<=` で適用): 1回だけ適用される空間変換
   - `resize(sx, sy)` ... サイズ変更
-  - `pos(x, y, anchor)` ... 配置位置
 
 - **Effect** (`&` で連結、`<=` で適用): float引数が表示時間内で **指定値 → 1.0** に線形変化
+  - `move(x, y, anchor)` ... 配置位置（固定 or from/toアニメーション）
   - `scale(1.5)` ... 1.5倍 → 等倍にアニメーション
   - `fade(alpha=0)` ... 透明 → 不透明にアニメーション
+
+### move（位置・移動）
+
+`move` は Effect として overlay の座標を制御する。
+
+```python
+# 固定位置
+move(x=0.5, y=0.5, anchor="center")
+
+# 移動アニメーション
+move(from_x=0.0, from_y=0.5, to_x=1.0, to_y=0.5, anchor="center")
+```
+
+### キャッシュ
+
+`Object.cache(path)` で単体レンダした結果をファイルに保存し、そのファイルを source に持つ新 Object を返す。
+
+```python
+# 画像キャッシュ（1フレーム）
+img = (obj <= resize(sx=0.5, sy=0.5)).cache("cached.png")
+
+# 動画キャッシュ（duration分）
+vid = (obj.time(6) <= move(...) & scale(...) & fade(...)).cache("cached.mp4")
+
+# キャッシュ読み込み（既存ファイル）
+obj = Object.load_cache("cached.mp4")
+```
+
+`overwrite=False` を指定すると、既存ファイルがあればレンダをスキップして高速化。
 
 ### プリセット
 
 TransformChain / EffectChain を変数に保存して再利用可能。
 
 ```python
-preset_t = resize(sx=0.3, sy=0.3) | pos(x=0.3, y=0.7, anchor="center")
-preset_e = scale(0.5) & fade(alpha=0)
+preset_e = move(x=0.3, y=0.7, anchor="center") & scale(0.5) & fade(alpha=0)
 
 obj = Object("image.png")
-obj.time(6)
-obj <= preset_t
-obj <= preset_e
+obj <= resize(sx=0.3, sy=0.3)
+obj.time(6) <= preset_e
 ```
 
 ### レイヤーの独立タイムライン
@@ -82,8 +109,8 @@ p.render("output.mp4")
 from scriptvedit import *
 
 bg = Object("bg_pattern_ishigaki.jpg")
-bg <= resize(sx=1, sy=1) | pos(x=0.5, y=0.5, anchor="center")
-bg.time(6) <= scale(1.5) & fade(alpha=0)
+bg <= resize(sx=1, sy=1)
+bg.time(6) <= move(x=0.5, y=0.5, anchor="center") & scale(1.5) & fade(alpha=0)
 ```
 
 ### 実行
