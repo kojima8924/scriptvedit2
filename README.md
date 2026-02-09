@@ -21,15 +21,15 @@ onigiri.py     ... 素材レイヤー
 - `&` (アンド) ... Effect（時間アニメーション: スケール、フェード）
 
 ```python
-obj | resize(obj, sx=0.3, sy=0.3) | pos(obj, x=0.5, y=0.5, anchor="center")
+obj | resize(sx=0.3, sy=0.3) | pos(x=0.5, y=0.5, anchor="center")
 obj.time(6) & scale(1.5) & fade(alpha=0)
 ```
 
 ### Transformは静的、Effectはアニメーション
 
 - **Transform** (`|`): 1回だけ適用される空間変換
-  - `resize(obj, sx, sy)` ... サイズ変更
-  - `pos(obj, x, y, anchor)` ... 配置位置
+  - `resize(sx, sy)` ... サイズ変更
+  - `pos(x, y, anchor)` ... 配置位置
 
 - **Effect** (`&`): float引数が表示時間内で **指定値 → 1.0** に線形変化
   - `scale(1.5)` ... 1.5倍 → 等倍にアニメーション
@@ -67,7 +67,7 @@ p.render("output.mp4")
 from scriptvedit import *
 
 bg = Object("bg_pattern_ishigaki.jpg")
-bg | resize(bg, sx=1, sy=1) | pos(bg, x=0.5, y=0.5, anchor="center")
+bg | resize(sx=1, sy=1) | pos(x=0.5, y=0.5, anchor="center")
 bg.time(6) & scale(1.5) & fade(alpha=0)
 ```
 

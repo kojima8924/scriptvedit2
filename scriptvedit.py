@@ -160,11 +160,45 @@ class Project:
         return cmd
 
 
+class TransformChain:
+    """複数のTransformをまとめたプリセット"""
+    def __init__(self, transforms):
+        self.transforms = list(transforms)
+
+    def __or__(self, other):
+        if isinstance(other, Transform):
+            return TransformChain(self.transforms + [other])
+        if isinstance(other, TransformChain):
+            return TransformChain(self.transforms + other.transforms)
+        return NotImplemented
+
+
+class EffectChain:
+    """複数のEffectをまとめたプリセット"""
+    def __init__(self, effects):
+        self.effects = list(effects)
+
+    def __and__(self, other):
+        if isinstance(other, Effect):
+            return EffectChain(self.effects + [other])
+        if isinstance(other, EffectChain):
+            return EffectChain(self.effects + other.effects)
+        return NotImplemented
+
+
 class Transform:
     def __init__(self, name, target=None, **params):
         self.name = name
         self.target = target
         self.params = params
+
+    def __or__(self, other):
+        """Transform | Transform → TransformChain"""
+        if isinstance(other, Transform):
+            return TransformChain([self, other])
+        if isinstance(other, TransformChain):
+            return TransformChain([self] + other.transforms)
+        return NotImplemented
 
     def __repr__(self):
         return f"Transform({self.name}, {self.params})"
@@ -174,6 +208,14 @@ class Effect:
     def __init__(self, name, **params):
         self.name = name
         self.params = params
+
+    def __and__(self, other):
+        """Effect & Effect → EffectChain"""
+        if isinstance(other, Effect):
+            return EffectChain([self, other])
+        if isinstance(other, EffectChain):
+            return EffectChain([self] + other.effects)
+        return NotImplemented
 
     def __repr__(self):
         return f"Effect({self.name}, {self.params})"
@@ -196,16 +238,20 @@ class Object:
         self.duration = duration
         return self
 
-    def __or__(self, transform):
-        """| 演算子: Transformを適用"""
-        if isinstance(transform, Transform):
-            self.transforms.append(transform)
+    def __or__(self, other):
+        """| 演算子: Transform / TransformChainを適用"""
+        if isinstance(other, Transform):
+            self.transforms.append(other)
+        elif isinstance(other, TransformChain):
+            self.transforms.extend(other.transforms)
         return self
 
-    def __and__(self, effect):
-        """& 演算子: Effectを適用"""
-        if isinstance(effect, Effect):
-            self.effects.append(effect)
+    def __and__(self, other):
+        """& 演算子: Effect / EffectChainを適用"""
+        if isinstance(other, Effect):
+            self.effects.append(other)
+        elif isinstance(other, EffectChain):
+            self.effects.extend(other.effects)
         return self
 
     def __repr__(self):
@@ -214,11 +260,11 @@ class Object:
 
 # --- Transform関数 ---
 
-def resize(target, **kwargs):
+def resize(target=None, **kwargs):
     return Transform("resize", target=target, **kwargs)
 
 
-def pos(target, **kwargs):
+def pos(target=None, **kwargs):
     return Transform("pos", target=target, **kwargs)
 
 
