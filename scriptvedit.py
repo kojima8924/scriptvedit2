@@ -276,6 +276,10 @@ class Project:
         self.objects = []
         self._layers = []  # [(start_idx, end_idx, priority)]
         self._anchors = {}  # anchor name → time
+        self._anchor_defined_in = {}  # anchor name → filename（診断用）
+        self._layer_files = []  # [(filename, priority)]
+        self._mode = "render"  # "plan" or "render"
+        self._current_layer_file = None  # 現在実行中のレイヤーファイル
         Project._current = self
 
     def configure(self, **kwargs):
@@ -283,8 +287,14 @@ class Project:
             setattr(self, key, value)
 
     def layer(self, filename, priority=0):
-        """レイヤーファイルを読み込み、Objectにpriorityを付与"""
+        """レイヤーファイルを登録（実行はrender時に遅延）"""
+        self._layer_files.append((filename, priority))
+
+    def _exec_layer(self, filename, priority):
+        """レイヤーファイルを実行してobjectsに登録"""
         start_idx = len(self.objects)
+        self._current_layer_file = filename
+        Project._current = self
         with open(filename, encoding="utf-8") as f:
             code = f.read()
         namespace = {}
@@ -293,6 +303,7 @@ class Project:
         self._layers.append((start_idx, end_idx, priority))
         for obj in self.objects[start_idx:end_idx]:
             obj.priority = priority
+        self._current_layer_file = None
 
     def _calc_total_duration(self):
         """各レイヤーの最大durationを返す"""
@@ -307,8 +318,8 @@ class Project:
             max_dur = max(max_dur, layer_dur)
         return max_dur if max_dur > 0 else 5
 
-    def _resolve_anchors(self):
-        """反復走査でアンカーとuntilを解決（plan pass）"""
+    def _resolve_anchors(self, check_unresolved=True):
+        """反復走査でアンカーとuntilを解決"""
         max_iter = len(self._layers) + 2
         for iteration in range(max_iter):
             changed = False
@@ -335,13 +346,22 @@ class Project:
                         current_time += item.duration
             if not changed:
                 break
-        # 未解決のuntilチェック
-        for item in self.objects:
-            until_name = getattr(item, '_until_anchor', None)
-            if until_name and until_name not in self._anchors:
-                raise RuntimeError(f"未定義のアンカー: '{until_name}'")
+        if check_unresolved:
+            # 未解決のuntilチェック
+            for item in self.objects:
+                until_name = getattr(item, '_until_anchor', None)
+                if until_name and until_name not in self._anchors:
+                    raise RuntimeError(f"未定義のアンカー: '{until_name}'")
 
     def render(self, output_path):
+        # Plan pass: アンカー解決（cache=no-op、objects破棄）
+        self._plan_resolve()
+        # Render pass: 本実行（anchors確定済み）
+        self.objects = []
+        self._layers = []
+        self._mode = "render"
+        for filename, priority in self._layer_files:
+            self._exec_layer(filename, priority)
         self._resolve_anchors()
         if self.duration is None:
             self.duration = self._calc_total_duration()
@@ -351,6 +371,32 @@ class Project:
         print()
         subprocess.run(cmd, check=True)
         print(f"\n完了: {output_path}")
+
+    def _plan_resolve(self):
+        """Plan pass: 固定点反復でアンカーを解決"""
+        for iteration in range(len(self._layer_files) + 2):
+            old_anchors = dict(self._anchors)
+            self.objects = []
+            self._layers = []
+            self._mode = "plan"
+            for filename, priority in self._layer_files:
+                self._exec_layer(filename, priority)
+            self._resolve_anchors(check_unresolved=False)
+            if self._anchors == old_anchors and iteration > 0:
+                break
+        # 未解決のuntilチェック（診断付き）
+        unresolved = []
+        for item in self.objects:
+            until_name = getattr(item, '_until_anchor', None)
+            if until_name and until_name not in self._anchors:
+                unresolved.append(until_name)
+        if unresolved:
+            names = ", ".join(f"'{n}'" for n in sorted(set(unresolved)))
+            defined = ", ".join(f"'{n}'" for n in sorted(self._anchors.keys())) or "(なし)"
+            raise RuntimeError(
+                f"未定義のアンカーが参照されています: {names}\n"
+                f"定義済みアンカー: {defined}"
+            )
 
     def render_object(self, obj, output_path, *, bg=None, fps=None):
         """単体Objectをレンダリングしてファイル出力"""
@@ -727,6 +773,8 @@ class Object:
         proj = Project._current
         if proj is None:
             raise RuntimeError("cache()にはアクティブなProjectが必要です")
+        if proj._mode == "plan":
+            return self  # Planモード: no-op（タイミング計算用にselfを返す）
         if overwrite or not os.path.exists(path):
             proj.render_object(self, path, bg=bg, fps=fps)
         # キャッシュObjectを生成（Projectに自動登録される）
@@ -799,6 +847,15 @@ def anchor(name):
     proj = Project._current
     if proj is None:
         raise RuntimeError("anchor()にはアクティブなProjectが必要です")
+    current_file = proj._current_layer_file or "(unknown)"
+    if name in proj._anchor_defined_in:
+        existing_file = proj._anchor_defined_in[name]
+        if existing_file != current_file:
+            raise RuntimeError(
+                f"アンカー '{name}' は既に '{existing_file}' で定義されています "
+                f"('{current_file}' で再定義は禁止)"
+            )
+    proj._anchor_defined_in[name] = current_file
     marker = _AnchorMarker(name)
     proj.objects.append(marker)
 

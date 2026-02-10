@@ -1,6 +1,6 @@
 ============================================================
   scriptvedit2 プロジェクト状況レポート (Claude Code → ChatGPT)
-  作成日: 2026-02-09
+  作成日: 2026-02-10
 ============================================================
 
 ■ プロジェクト概要
@@ -10,11 +10,11 @@
 
 ■ ファイル構成
   scriptvedit2/
-  ├── scriptvedit.py   ← コアライブラリ (561行)
+  ├── scriptvedit.py   ← コアライブラリ (819行)
   ├── main.py          ← オーケストレータ (デモ用)
   ├── bg.py            ← 背景レイヤー (デモ用)
   ├── onigiri.py       ← おにぎりレイヤー (デモ用)
-  ├── test/            ← テスト01〜11 (各test##_main.py + レイヤーファイル群)
+  ├── test/            ← テスト01〜12 (各test##_main.py + レイヤーファイル群)
   └── *.png, *.jpg     ← 素材画像 (変更禁止)
 
 ■ コミット履歴 (古い順)
@@ -24,7 +24,67 @@
   129c334 レイヤー記法を obj.time(6) <= effect_chain の1行形式に統一
   0c12e42 pos廃止→move Effect統合、media_type導入、cache機能追加
   72a91bf 画像キャッシュの透過対応と1ファイル1レイヤーテスト10件追加
-  ★未コミット: anchor/pause/until/2パス機能 + test11
+  d44a0b3 anchor/pause/until機能と2パスアーキテクチャを追加
+  3fc1416 Expr式ビルダー導入: Effect引数をfloat/lambda(u)/Expr統一（破壊的変更）
+
+============================================================
+■ 【最新】 Expr式ビルダー (3fc1416)
+============================================================
+
+  ★破壊的変更: Effect引数のセマンティクスが変わった。
+
+  旧仕様:
+    scale(0.5)      → 0.5→1.0にアニメーション
+    fade(alpha=0)    → 0→1にフェードイン
+
+  新仕様:
+    scale(0.5)                        → 定数0.5倍（アニメーションなし）
+    scale(lambda u: lerp(0.5, 1, u))  → 0.5→1.0にアニメーション（旧動作の再現）
+    fade(0.5)                         → 定数0.5の不透明度
+    fade(lambda u: u)                 → 0→1にフェードイン（旧動作の再現）
+
+  ◆ Exprクラス群
+    Expr        ... 基底クラス。演算子オーバーロード (+,-,*,/,**,neg,abs)
+    Const(v)    ... 定数ノード → "v"
+    Var("u")    ... 変数ノード → u_expr (正規化時間0〜1)
+    _BinOp      ... 二項演算 → "(left op right)"
+    _UnOp       ... 単項演算 → "(op x)"
+    _FuncCall   ... 関数呼び出し → "name(arg1\,arg2\,...)"
+
+  ◆ _resolve_param(param)
+    float/int   → Const(param)
+    lambda(u)   → lambdaにVar("u")を渡してExpr式木を構築
+    Expr        → そのまま
+
+  ◆ 数学関数（from scriptvedit import * で使用可能）
+    三角:       sin, cos, tan, asin, acos, atan, atan2
+    双曲線:     sinh, cosh, tanh
+    指数/対数:  exp, log, sqrt, log10, cbrt
+    丸め:       floor, ceil, trunc
+    補間:       lerp(a, b, t) = a + (b-a)*t
+    クランプ:   clip(x, lo, hi), clamp (エイリアス)
+    ステップ:   step(edge, x), smoothstep(edge0, edge1, x)
+    その他:     mod(a, b), frac(x), deg2rad(x), rad2deg(x)
+    組み込み互換: abs, min, max, round, pow
+      → Expr引数ならffmpeg式生成、通常値ならPython組み込み動作
+    定数:       PI = 3.141592653589793, E = 2.718281828459045
+
+  ◆ DSL使用例
+    # 定数スケール（新しいセマンティクス）
+    obj.time(5) <= scale(0.5)
+
+    # アニメーション（lambda形式）
+    obj.time(5) <= scale(lambda u: lerp(0.5, 1, u))
+
+    # sin波フェード（フェードイン→フェードアウト）
+    obj.time(4) <= fade(lambda u: sin(u * PI))
+
+    # lambda move
+    obj.time(4) <= move(x=lambda u: lerp(0.2, 0.8, u), y=0.5, anchor="center")
+
+  ◆ move() の from/to 引数
+    move(from_x=0.1, to_x=0.9, ...) は内部で
+    lerp(0.1, 0.9, u) の Expr に自動変換される（後方互換）
 
 ============================================================
 ■ DSL記法 (現在の最新仕様)
@@ -41,8 +101,10 @@
   ◆ レイヤーファイル (1ファイル=1レイヤー)
     from scriptvedit import *
     obj = Object("image.png")
-    obj <= resize(sx=0.3, sy=0.3)                    # Transform適用
-    obj.time(6) <= move(x=0.5, y=0.5, anchor="center") & scale(0.5) & fade(alpha=0)
+    obj <= resize(sx=0.3, sy=0.3)
+    obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
+                   & scale(lambda u: lerp(0.5, 1, u)) \
+                   & fade(lambda u: u)
 
   ◆ 演算子
     obj <= Transform/TransformChain     ... Transform適用 (resize等)
@@ -55,9 +117,12 @@
 
   ◆ Effect関数
     move(x=0.5, y=0.5, anchor="center")             ... 固定位置
-    move(from_x=0.1, from_y=0.9, to_x=0.5, to_y=0.5, anchor="center") ... アニメーション
-    scale(value)    ... value → 1.0 にアニメーション (0.5なら小→大)
-    fade(alpha=0)   ... alpha → 1.0 にアニメーション (0なら透明→不透明)
+    move(x=lambda u: ..., y=0.5, anchor="center")   ... lambda位置
+    move(from_x=0.1, to_x=0.9, anchor="center")     ... from/toアニメーション
+    scale(value)                ... 定数スケール
+    scale(lambda u: expr)       ... lambda式スケール
+    fade(alpha)                 ... 定数不透明度
+    fade(lambda u: expr)        ... lambda式フェード
 
   ◆ キャッシュ機能
     cached = obj.cache("cache.png")         ... 透過PNG出力 (背景なし)
@@ -65,148 +130,88 @@
     cached.time(5) <= move(...) & scale(...)
 
 ============================================================
-■ 【最新】 anchor/pause/until 機能 (未コミット)
+■ anchor/pause/until 機能
 ============================================================
-
-  ファイル跨ぎのタイムライン同期機能。2パス(plan→render)アーキテクチャ。
 
   ◆ anchor(name)
     レイヤー内の現在の累積時刻を名前付きアンカーとして登録。
-    レンダリングには影響しない（マーカーのみ）。
 
-    例: obj.time(3) <= move(...)
-        anchor("scene1_done")     # ← この時点 t=3 を記録
-
-  ◆ pause.time(N)
-    非描画のタイムラインアイテム。N秒間、何も描画せず時間だけ進む。
-
-    例: pause.time(2)             # 2秒間の空白
-
-  ◆ pause.until(name)
-    アンカー時刻まで待機する非描画アイテム。
-    durationがアンカー解決時に自動計算される。
-
-    例: pause.until("scene1_done")  # anchor("scene1_done")の時刻まで待つ
+  ◆ pause.time(N) / pause.until(name)
+    非描画タイムラインアイテム。時間占有のみ。
 
   ◆ obj.until(name)
-    Objectのdurationをアンカー時刻まで伸長。
-    .time(N) の代わりに使う。
-
-    例: bg.until("sync") <= move(x=0.5, y=0.5, anchor="center")
+    durationをアンカー時刻まで伸長。
 
   ◆ 2パスアーキテクチャ
-    render()呼び出し時:
-    1. Plan pass: _resolve_anchors() で反復走査によりアンカー→until を解決
-       - max_iter = len(layers) + 2 (無限ループ防止)
-       - 収束したら早期break
-       - 未定義アンカー参照はRuntimeError
-    2. Render pass: ffmpegコマンド生成・実行
-
-  ◆ DSL使用例 (test11)
-    --- test11_maku.py (priority=0) ---
-    maku = Object("../pattern_teishiki_maku.png")
-    maku <= resize(sx=1, sy=1)
-    maku.time(3) <= move(x=0.5, y=0.5, anchor="center")
-    anchor("curtain_done")
-
-    --- test11_oni.py (priority=1) ---
-    pause.until("curtain_done")
-    oni = Object("../onigiri_tenmusu.png")
-    oni <= resize(sx=0.4, sy=0.4)
-    oni.time(3) <= move(x=0.5, y=0.5, anchor="center") & scale(0.5) & fade(alpha=0)
-
-    結果: 定式幕が0〜3秒表示 → おにぎりが3〜6秒表示（同期動作）
+    render() → _resolve_anchors() [plan pass] → _build_ffmpeg_cmd() [render pass]
 
 ============================================================
-■ クラス構成 (scriptvedit.py 561行)
+■ クラス構成 (scriptvedit.py 819行)
 ============================================================
 
-  Project           ... オーケストレータ。layer(), render(), cache系, _resolve_anchors()
-  Object            ... 画像/動画オブジェクト。transforms[], effects[], .time(), .until(), .cache()
-  Pause             ... 非描画タイムラインアイテム。.time(), .until()
-  _AnchorMarker     ... アンカー位置マーカー（内部クラス）
-  _PauseFactory     ... pause.time()/pause.until() のファクトリ
-  Transform         ... resize等の変形。__or__ で TransformChain 生成
-  TransformChain    ... 複数Transformのチェーン
-  Effect            ... move/scale/fade等のエフェクト。__and__ で EffectChain 生成
-  EffectChain       ... 複数Effectのチェーン
+  Expr系 (L8-131):
+  Expr, Const, Var, _BinOp, _UnOp, _FuncCall, _to_expr, _resolve_param
 
-  グローバル:
-  pause = _PauseFactory()   ... DSLで pause.time(N) / pause.until(name) として使用
+  数学関数 (L134-248):
+  sin, cos, tan, ... lerp, clip, smoothstep, ... abs, min, max, round, pow
+  PI, E
 
-============================================================
-■ レンダリングパイプライン
-============================================================
+  Project (L266-555):
+  layer(), render(), render_object(), _build_ffmpeg_cmd(),
+  _build_video_cache_cmd(), _build_image_cache_cmd(), _resolve_anchors()
 
-  1. Project.layer(file, priority)
-     → exec() でレイヤーファイルを実行
-     → Object/Pause/_AnchorMarker が Project.objects に自動登録
-     → priority を付与
+  _build_move_exprs() (L558-587)
+  TransformChain, EffectChain, Transform, Effect (L590-655)
+  _AnchorMarker, Pause, Object (L658-754)
 
-  2. Project.render(output)
-     → _resolve_anchors() [plan pass]
-       - 全レイヤーの objects を反復走査
-       - _AnchorMarker → anchors dict に時刻を記録
-       - until 付きアイテム → anchor時刻から duration を自動計算
-       - start_time を全アイテムに設定
-       - 収束まで繰り返し（max_iter回）
-     → _calc_total_duration()
-       - 各レイヤーの合計durationの最大値
-     → _build_ffmpeg_cmd() [render pass]
-       - Object のみ抽出 (Pause/_AnchorMarker 除外)
-       - priority 昇順でソート (z-order)
-       - 各Object: 入力追加 → フィルタ生成 → overlay
-       - enable='between(t,start,end)' で時間制御
-     → ffmpeg 実行
+  ファクトリ関数 (L757-791):
+  resize(), scale(), fade(), move()
 
-  ffmpeg filter_complex 構造:
-    [0:v] = 背景色 (color source)
-    [N:v] = 各Object入力 (image: -loop 1, video: そのまま)
-    各Object: scale(resize) → scale(anim) → geq(fade) → overlay
+  アンカー/同期 (L794-818):
+  anchor(), _PauseFactory, pause
 
 ============================================================
 ■ テスト一覧 (test/ ディレクトリ)
 ============================================================
 
-  test01: bg(石垣)+おにぎり対角移動+fade          5秒 darkred   PASS
-  test02: 定式幕+cafe scale+fade                  4秒 black     PASS
-  test03: 3レイヤーmoveアニメーション               5秒 black     PASS
-  test04: 画像キャッシュ透過テスト                  3秒 white     PASS
-  test05: 静的表示(エフェクトなし)                  2秒 green     PASS
-  test06: 大スケール 3.0→1.0                       3秒 olive     PASS
-  test07: 3レイヤー横並び                           4秒 navy      PASS
-  test08: from/to アニメーション左→右               5秒 darkgreen PASS
-  test09: 4レイヤー四隅→中央                        4秒 gray      PASS
-  test10: 画像キャッシュ+動画合成                    5秒 purple    PASS
-  test11: anchor/pause.until クロスレイヤー同期      6秒 darkblue  PASS
+  test01: bg(石垣)+おにぎり対角移動+fade          5秒 darkred
+  test02: 定式幕+cafe scale+fade                  4秒 black
+  test03: 3レイヤーmoveアニメーション               5秒 black
+  test04: 画像キャッシュ透過テスト                  3秒 white
+  test05: 静的表示(エフェクトなし)                  2秒 green
+  test06: 大スケール 3.0→1.0                       3秒 olive
+  test07: 3レイヤー横並び                           4秒 navy
+  test08: from/to アニメーション左→右               5秒 darkgreen
+  test09: 4レイヤー四隅→中央                        4秒 gray
+  test10: 画像キャッシュ+動画合成                    5秒 purple
+  test11: anchor/pause.until クロスレイヤー同期      6秒 darkblue
+  test12: Expr機能検証(sin波fade/lambda scale/move) 4秒 darkslategray
 
-  ※ test10の開始フレーム(t=0)で定式幕が見えない現象あり。
-    ffmpegのフレーム抽出タイミングの問題（enable='between(t,0,5)'が
-    t=0ジャストで未発火）であり、scriptvedit.pyのバグではない。
+  ※ test01〜11は lambda形式に移行済み（旧アニメーション動作を再現）
+  ※ test12はExpr新機能のデモ
 
 ============================================================
 ■ 既知の制約・注意点
 ============================================================
 
-  1. Effect のアニメーション方向は「指定値 → 1.0」で固定
-     scale(0.5) = 小→等倍、fade(alpha=0) = 透明→不透明
-     逆方向（大→小、不透明→透明）は未実装
-
-  2. overlay の enable='between()' で t=0 ジャストが拾われない場合がある
+  1. overlay の enable='between()' で t=0 ジャストが拾われない場合がある
      (ffmpegの浮動小数点精度の問題)
 
-  3. cache() + until() の組み合わせ:
+  2. cache() + until() の組み合わせ:
      cache() は exec 時（render前）に実行されるため、until で duration が
      未確定の場合、動画キャッシュの長さは fallback の 5秒になる。
      画像キャッシュ (.png) なら問題なし。
 
-  4. 同一レイヤー内のオブジェクトは順次タイムライン（直列配置）
+  3. 同一レイヤー内のオブジェクトは順次タイムライン（直列配置）
      並列配置（同時表示）するには別レイヤーファイルにする
 
-  5. anchor 循環参照の検出は未実装
+  4. anchor 循環参照の検出は未実装
      （反復回数上限で無限ループは防止しているが、明示的エラーは出ない）
 
-  6. Windows環境 (Python 3.10, ffmpeg 8.0) でのみテスト済み
+  5. Windows環境 (Python 3.10, ffmpeg 8.0) でのみテスト済み
+
+  6. lambda内でmath.sin等は使えない（Expr非対応）
+     scriptveditのsin, cos等を使うこと。エラーメッセージで案内される。
 
 ============================================================
 ■ 素材ファイル (変更禁止)
@@ -227,6 +232,5 @@
   Python: 3.10
   ffmpeg: 8.0-full_build
   Shell: Git Bash / PowerShell
-  Git hooks: pre-push で自動ZIP生成 (scriptvedit2.zip, _N.zip)
 
 ============================================================
