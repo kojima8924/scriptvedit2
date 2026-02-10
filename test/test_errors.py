@@ -1,7 +1,10 @@
 # エラーケーステスト: 各種エラー条件の自動検証
 import sys, os, tempfile
 sys.path.insert(0, "..")
-from scriptvedit import _resolve_param, Project, P
+from scriptvedit import (
+    _resolve_param, Project, P, Object, VideoView, AudioView,
+    again, move, fade, resize, AudioEffect, AudioEffectChain,
+)
 
 
 def test_math_sin_in_lambda():
@@ -131,6 +134,94 @@ def test_cache_use_no_file():
         return False, f"メッセージが不適切: {msg}"
 
 
+def test_image_length():
+    """画像の length() → TypeError"""
+    p = Project()
+    obj = Object("../onigiri_tenmusu.png")
+    try:
+        obj.length()
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "画像" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_missing_file_length():
+    """存在しないファイルの length() → FileNotFoundError"""
+    p = Project()
+    obj = Object("nonexistent_video.mp4")
+    try:
+        obj.length()
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        msg = str(e)
+        if "メディアの長さを取得できません" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_view_time_forbidden():
+    """VideoView.time() / AudioView.time() → TypeError"""
+    p = Project()
+    obj = Object("../onigiri_tenmusu.png")
+    vv = VideoView(obj)
+    try:
+        vv.time(3)
+        return False, "VideoView.time() 例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "禁止" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_view_until_forbidden():
+    """VideoView.until() / AudioView.until() → TypeError"""
+    p = Project()
+    obj = Object("../Impact-38.mp3")
+    av = AudioView(obj)
+    try:
+        av.until("test")
+        return False, "AudioView.until() 例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "禁止" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_video_audio_effect_mismatch():
+    """VideoView <= again() → TypeError"""
+    p = Project()
+    obj = Object("../onigiri_tenmusu.png")
+    vv = VideoView(obj)
+    try:
+        vv <= again(0.5)
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "映像系のみ" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_audio_video_effect_mismatch():
+    """AudioView <= move() → TypeError"""
+    p = Project()
+    obj = Object("../Impact-38.mp3")
+    av = AudioView(obj)
+    try:
+        av <= move(x=0.5, y=0.5)
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "音声系のみ" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -139,6 +230,12 @@ ALL_TESTS = [
     ("50%P == 0.5", test_percent_value),
     ("cache='invalid'", test_cache_invalid),
     ("cache='use' ファイル不在", test_cache_use_no_file),
+    ("画像のlength()", test_image_length),
+    ("存在しないファイルのlength()", test_missing_file_length),
+    ("VideoView.time()禁止", test_view_time_forbidden),
+    ("AudioView.until()禁止", test_view_until_forbidden),
+    ("VideoView<=音声エフェクト", test_video_audio_effect_mismatch),
+    ("AudioView<=映像エフェクト", test_audio_video_effect_mismatch),
 ]
 
 

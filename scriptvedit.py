@@ -7,8 +7,11 @@ import builtins as _builtins
 __all__ = [
     # コアクラス
     "Project", "Object", "Transform", "TransformChain", "Effect", "EffectChain",
+    "AudioEffect", "AudioEffectChain",
+    "VideoView", "AudioView",
     # ファクトリ関数
     "resize", "scale", "fade", "move",
+    "again", "afade", "adelete", "delete", "trim", "atrim", "atempo",
     # アンカー/同期
     "anchor", "pause",
     # Expr
@@ -294,6 +297,7 @@ P = Percent()
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".gif"}
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
 
 def _detect_media_type(path):
@@ -302,6 +306,8 @@ def _detect_media_type(path):
         return "image"
     if ext in _VIDEO_EXTS:
         return "video"
+    if ext in _AUDIO_EXTS:
+        return "audio"
     return "image"  # フォールバック
 
 
@@ -334,6 +340,7 @@ class Project:
         self._layer_specs = []  # [{"filename": str, "priority": int, "cache": str}]
         self._mode = "render"  # "plan" or "render"
         self._current_layer_file = None  # 現在実行中のレイヤーファイル
+        self._probe_cache = {}  # path → {"duration": float, "has_audio": bool}
         Project._current = self
 
     def configure(self, **kwargs):
@@ -355,6 +362,28 @@ class Project:
         self._layers = []
         self._anchors = {}
         self._anchor_defined_in = {}
+
+    def _probe_media(self, path):
+        """ffprobeでメディア情報を取得（キャッシュあり）"""
+        if path in self._probe_cache:
+            return self._probe_cache[path]
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_streams", "-show_format", path],
+                capture_output=True, text=True, timeout=10
+            )
+            data = json.loads(result.stdout)
+            streams = data.get("streams", [])
+            has_audio = any(s.get("codec_type") == "audio" for s in streams)
+            duration_str = data.get("format", {}).get("duration")
+            duration = float(duration_str) if duration_str else None
+            info = {"has_audio": has_audio, "duration": duration}
+            self._probe_cache[path] = info
+            return info
+        except Exception:
+            self._probe_cache[path] = None
+            return None
 
     def layer(self, filename, priority=0, cache="off"):
         """レイヤーファイルを登録（実行はrender時に遅延）"""
@@ -534,11 +563,16 @@ class Project:
         cached_obj.source = webm_path
         cached_obj.transforms = []
         cached_obj.effects = []
+        cached_obj.audio_effects = []
         cached_obj.duration = None
         cached_obj.start_time = 0
         cached_obj.priority = spec["priority"]
         cached_obj.media_type = "video"
         cached_obj._until_anchor = None
+        cached_obj._video_deleted = False
+        cached_obj._audio_deleted = False
+        cached_obj._has_video = True
+        cached_obj._has_audio = False
         # anchors.jsonからduration/anchorsを読み込み
         if os.path.exists(json_path):
             with open(json_path, encoding="utf-8") as f:
@@ -762,20 +796,29 @@ class Project:
         renderable = [o for o in self.objects if isinstance(o, Object)]
         sorted_objects = sorted(renderable, key=lambda o: o.priority)
 
-        current_base = "[0:v]"
-
+        # 入力を追加（映像+音声共通）
+        input_map = {}  # obj id → input_idx
         for i, obj in enumerate(sorted_objects):
             input_idx = i + 1
-
+            input_map[id(obj)] = input_idx
             if obj.media_type == "image":
                 inputs.extend(["-loop", "1", "-i", obj.source])
-            else:
+            elif obj.media_type == "audio":
+                inputs.extend(["-i", obj.source])
+            else:  # video
                 inputs.extend(["-i", obj.source])
 
+        # --- 映像チェーン ---
+        current_base = "[0:v]"
+        video_objects = [o for o in sorted_objects if o.has_video]
+
+        for obj in video_objects:
+            input_idx = input_map[id(obj)]
             dur = obj.duration or 5
             start = obj.start_time
 
-            obj_filters = _build_transform_filters(obj)
+            pre_filters = _build_video_pre_filters(obj)
+            obj_filters = pre_filters + _build_transform_filters(obj)
             obj_filters.extend(_build_effect_filters(obj, start, dur))
 
             obj_label = f"[obj{input_idx}]"
@@ -799,19 +842,67 @@ class Project:
             )
             current_base = out_label
 
+        # --- 音声チェーン ---
+        audio_objects = [o for o in sorted_objects if o.has_audio]
+        audio_out = None
+
+        if audio_objects:
+            audio_labels = []
+            for ai, obj in enumerate(audio_objects):
+                input_idx = input_map[id(obj)]
+                dur = obj.duration or 5
+                start = obj.start_time
+
+                a_filters = []
+                # atrim/atempo前処理
+                a_pre = _build_audio_pre_filters(obj)
+                # auto atrim: obj.durationがあり、明示atrimがなければ自動トリム
+                has_explicit_atrim = any(
+                    e.name == "atrim" for e in obj.audio_effects)
+                if not has_explicit_atrim and obj.duration is not None:
+                    a_pre = [f"atrim=duration={obj.duration}",
+                             "asetpts=PTS-STARTPTS"] + a_pre
+                a_filters.extend(a_pre)
+                # 音声エフェクト（again/afade）
+                a_filters.extend(_build_audio_effect_filters(obj, dur))
+                # adelay（タイミングシフト）
+                delay_ms = int(start * 1000)
+                if delay_ms > 0:
+                    a_filters.append(f"adelay={delay_ms}|{delay_ms}")
+
+                a_label = f"[a{ai}]"
+                if a_filters:
+                    filter_parts.append(
+                        f"[{input_idx}:a]{','.join(a_filters)}{a_label}"
+                    )
+                else:
+                    a_label = f"[{input_idx}:a]"
+                audio_labels.append(a_label)
+
+            if len(audio_labels) == 1:
+                audio_out = audio_labels[0]
+            else:
+                amix_in = "".join(audio_labels)
+                audio_out = "[aout]"
+                filter_parts.append(
+                    f"{amix_in}amix=inputs={len(audio_labels)}:normalize=0{audio_out}"
+                )
+
         cmd = ["ffmpeg", "-y"]
         cmd.extend(inputs)
 
         if filter_parts:
             cmd.extend(["-filter_complex", ";".join(filter_parts)])
             cmd.extend(["-map", current_base])
+            if audio_out:
+                cmd.extend(["-map", audio_out])
 
-        cmd.extend([
-            "-c:v", "libx264",
-            "-t", str(self.duration),
-            "-pix_fmt", "yuv420p",
-            output_path,
-        ])
+        cmd.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+        if audio_out:
+            cmd.extend(["-c:a", "aac"])
+        else:
+            cmd.extend(["-an"])
+        cmd.extend(["-t", str(self.duration), output_path])
 
         return cmd
 
@@ -830,9 +921,11 @@ def _build_transform_filters(obj):
 
 
 def _build_effect_filters(obj, start, dur):
-    """scale/fade等のeffectフィルタリストを生成（move以外）"""
+    """scale/fade等のeffectフィルタリストを生成（move/trim/delete以外）"""
     filters = []
     for e in obj.effects:
+        if e.name in ("move", "trim", "delete"):
+            continue
         if e.name == "scale":
             scale_expr = e.params.get("value", Const(1))
             u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
@@ -879,6 +972,50 @@ def _build_move_exprs(obj, start, dur):
         y_result = base_y
 
     return x_result, y_result
+
+
+def _build_video_pre_filters(obj):
+    """trim等の前処理フィルタ"""
+    filters = []
+    for e in obj.effects:
+        if e.name == "trim":
+            d = e.params.get("duration")
+            if d is not None:
+                filters.append(f"trim=duration={d}")
+                filters.append("setpts=PTS-STARTPTS")
+    return filters
+
+
+def _build_audio_pre_filters(obj):
+    """atrim/atempo等の前処理フィルタ"""
+    filters = []
+    for e in obj.audio_effects:
+        if e.name == "atrim":
+            d = e.params.get("duration")
+            if d is not None:
+                filters.append(f"atrim=duration={d}")
+                filters.append("asetpts=PTS-STARTPTS")
+        elif e.name == "atempo":
+            rate = e.params.get("rate", 1.0)
+            filters.append(f"atempo={rate}")
+    return filters
+
+
+def _build_audio_effect_filters(obj, dur):
+    """音声エフェクトフィルタを生成（again/afade）"""
+    filters = []
+    for e in obj.audio_effects:
+        if e.name == "again":
+            value_expr = e.params.get("value", Const(1))
+            u_expr = f"clip((t)/{dur}\\,0\\,1)"
+            ffmpeg_str = value_expr.to_ffmpeg(u_expr)
+            filters.append(f"volume=volume='{ffmpeg_str}':eval=frame")
+        elif e.name == "afade":
+            alpha_expr = e.params.get("alpha", Const(1.0))
+            u_expr = f"clip((t)/{dur}\\,0\\,1)"
+            ffmpeg_str = alpha_expr.to_ffmpeg(u_expr)
+            filters.append(f"volume=volume='{ffmpeg_str}':eval=frame")
+    return filters
 
 
 class TransformChain:
@@ -971,6 +1108,72 @@ class _DisabledEffect:
         return self.original
 
 
+class AudioEffect:
+    """音声エフェクト（again, afade, adelete, atrim, atempo等）"""
+    def __init__(self, name, **params):
+        self.name = name
+        self.params = params
+
+    def __and__(self, other):
+        if isinstance(other, AudioEffect):
+            return AudioEffectChain([self, other])
+        if isinstance(other, AudioEffectChain):
+            return AudioEffectChain([self] + other.effects)
+        if isinstance(other, _DisabledAudioEffect):
+            return AudioEffectChain([self, other])
+        return NotImplemented
+
+    def __invert__(self):
+        return _DisabledAudioEffect(self)
+
+    def __repr__(self):
+        return f"AudioEffect({self.name}, {self.params})"
+
+
+class AudioEffectChain:
+    """複数のAudioEffectをまとめたチェーン"""
+    def __init__(self, effects):
+        self.effects = list(effects)
+
+    def __and__(self, other):
+        if isinstance(other, AudioEffect):
+            return AudioEffectChain(self.effects + [other])
+        if isinstance(other, AudioEffectChain):
+            return AudioEffectChain(self.effects + other.effects)
+        if isinstance(other, _DisabledAudioEffect):
+            return AudioEffectChain(self.effects + [other])
+        return NotImplemented
+
+    def __invert__(self):
+        return _DisabledAudioEffect(self)
+
+    def __repr__(self):
+        return f"AudioEffectChain({self.effects})"
+
+
+class _DisabledAudioEffect:
+    """無効化AudioEffect"""
+    def __init__(self, original):
+        self.original = original
+
+    def __and__(self, other):
+        if isinstance(other, (AudioEffect, _DisabledAudioEffect)):
+            return AudioEffectChain([self, other])
+        if isinstance(other, AudioEffectChain):
+            return AudioEffectChain([self] + other.effects)
+        return NotImplemented
+
+    def __rand__(self, other):
+        if isinstance(other, AudioEffect):
+            return AudioEffectChain([other, self])
+        if isinstance(other, AudioEffectChain):
+            return AudioEffectChain(other.effects + [self])
+        return NotImplemented
+
+    def __invert__(self):
+        return self.original
+
+
 class Transform:
     def __init__(self, name, **params):
         self.name = name
@@ -1046,14 +1249,47 @@ class Object:
         self.source = source
         self.transforms = []
         self.effects = []
+        self.audio_effects = []
         self.duration = None
         self.start_time = 0
         self.priority = 0
         self.media_type = _detect_media_type(source)
         self._until_anchor = None
+        self._video_deleted = False
+        self._audio_deleted = False
+        # has_video / has_audio のデフォルト
+        if self.media_type == "image":
+            self._has_video = True
+            self._has_audio = False
+        elif self.media_type == "audio":
+            self._has_video = False
+            self._has_audio = True
+        else:  # video
+            self._has_video = True
+            self._has_audio = None  # 未判定→ffprobeで解決
         # 現在のProjectに自動登録
         if Project._current is not None:
             Project._current.objects.append(self)
+
+    @property
+    def has_video(self):
+        if self._video_deleted:
+            return False
+        return self._has_video if self._has_video is not None else True
+
+    @property
+    def has_audio(self):
+        if self._audio_deleted:
+            return False
+        if self._has_audio is None:
+            proj = Project._current
+            if proj:
+                info = proj._probe_media(self.source)
+                if info:
+                    self._has_audio = info.get("has_audio", False)
+                    return self._has_audio
+            return True  # probe不可→True想定
+        return self._has_audio
 
     def time(self, duration):
         """表示時間を設定"""
@@ -1066,8 +1302,8 @@ class Object:
         return self
 
     def __le__(self, rhs):
-        """<= 演算子: Transform/TransformChain/Effect/EffectChainを適用"""
-        if isinstance(rhs, (_DisabledTransform, _DisabledEffect)):
+        """<= 演算子: Transform/Effect/AudioEffect等を適用"""
+        if isinstance(rhs, (_DisabledTransform, _DisabledEffect, _DisabledAudioEffect)):
             return self  # 無効化→スキップ
         if isinstance(rhs, Transform):
             self.transforms.append(rhs)
@@ -1075,12 +1311,33 @@ class Object:
             self.transforms.extend(
                 t for t in rhs.transforms if not isinstance(t, _DisabledTransform))
         elif isinstance(rhs, Effect):
-            self.effects.append(rhs)
+            if rhs.name == "delete":
+                self._video_deleted = True
+            else:
+                self.effects.append(rhs)
         elif isinstance(rhs, EffectChain):
-            self.effects.extend(
-                e for e in rhs.effects if not isinstance(e, _DisabledEffect))
+            for e in rhs.effects:
+                if isinstance(e, _DisabledEffect):
+                    continue
+                if e.name == "delete":
+                    self._video_deleted = True
+                else:
+                    self.effects.append(e)
+        elif isinstance(rhs, AudioEffect):
+            if rhs.name == "adelete":
+                self._audio_deleted = True
+            else:
+                self.audio_effects.append(rhs)
+        elif isinstance(rhs, AudioEffectChain):
+            for e in rhs.effects:
+                if isinstance(e, _DisabledAudioEffect):
+                    continue
+                if e.name == "adelete":
+                    self._audio_deleted = True
+                else:
+                    self.audio_effects.append(e)
         else:
-            raise TypeError(f"Object <= に渡せるのは Transform/TransformChain/Effect/EffectChain のみ: {type(rhs)}")
+            raise TypeError(f"Object <= に渡せるのは Transform/Effect/AudioEffect 等のみ: {type(rhs)}")
         return self
 
     def _make_cached_object(self, path):
@@ -1090,11 +1347,16 @@ class Object:
         cached.source = path
         cached.transforms = []
         cached.effects = []
+        cached.audio_effects = []
         cached.duration = self.duration
         cached.start_time = self.start_time
         cached.priority = self.priority
         cached.media_type = _detect_media_type(path)
         cached._until_anchor = self._until_anchor
+        cached._video_deleted = False
+        cached._audio_deleted = False
+        cached._has_video = True if cached.media_type != "audio" else False
+        cached._has_audio = True if cached.media_type != "image" else False
         if proj is not None and self in proj.objects:
             idx = proj.objects.index(self)
             proj.objects[idx] = cached
@@ -1117,8 +1379,84 @@ class Object:
         """キャッシュファイルからObjectを生成"""
         return cls(path)
 
+    def length(self):
+        """加工後の再生時間を返す（ffprobe + 時間影響エフェクト反映）"""
+        if self.media_type == "image":
+            raise TypeError("画像にはlength()を使えません。動画/音声のみ対応です。")
+        proj = Project._current
+        if proj is None:
+            raise RuntimeError("length()にはアクティブなProjectが必要です")
+        info = proj._probe_media(self.source)
+        if info is None or info.get("duration") is None:
+            raise FileNotFoundError(
+                f"メディアの長さを取得できません: {self.source}")
+        base_dur = info["duration"]
+        result = base_dur
+        # 映像trim
+        for e in self.effects:
+            if e.name == "trim":
+                d = e.params.get("duration")
+                if d is not None:
+                    result = min(result, d)
+        # 音声atrim/atempo
+        for e in self.audio_effects:
+            if e.name == "atrim":
+                d = e.params.get("duration")
+                if d is not None:
+                    result = min(result, d)
+            elif e.name == "atempo":
+                rate = e.params.get("rate", 1.0)
+                if rate > 0:
+                    result = result / rate
+        return result
+
+    def split(self):
+        """(VideoView or None, AudioView or None) を返す"""
+        v = VideoView(self) if self.has_video else None
+        a = AudioView(self) if self.has_audio else None
+        return v, a
+
     def __repr__(self):
-        return f"Object({self.source}, transforms={self.transforms}, effects={self.effects})"
+        return f"Object({self.source}, transforms={self.transforms}, effects={self.effects}, audio_effects={self.audio_effects})"
+
+
+class VideoView:
+    """映像ビュー（split()で生成、参照専用）"""
+    def __init__(self, clip):
+        self._clip = clip
+
+    def __le__(self, rhs):
+        """映像系のみ受け入れ"""
+        if isinstance(rhs, (Transform, TransformChain, Effect, EffectChain,
+                           _DisabledTransform, _DisabledEffect)):
+            self._clip.__le__(rhs)
+            return self
+        raise TypeError(f"VideoView <= には映像系のみ: {type(rhs)}")
+
+    def time(self, *args, **kwargs):
+        raise TypeError("VideoView.time() は禁止です。clip.time() を使ってください。")
+
+    def until(self, *args, **kwargs):
+        raise TypeError("VideoView.until() は禁止です。clip.until() を使ってください。")
+
+
+class AudioView:
+    """音声ビュー（split()で生成、参照専用）"""
+    def __init__(self, clip):
+        self._clip = clip
+
+    def __le__(self, rhs):
+        """音声系のみ受け入れ"""
+        if isinstance(rhs, (AudioEffect, AudioEffectChain, _DisabledAudioEffect)):
+            self._clip.__le__(rhs)
+            return self
+        raise TypeError(f"AudioView <= には音声系のみ: {type(rhs)}")
+
+    def time(self, *args, **kwargs):
+        raise TypeError("AudioView.time() は禁止です。clip.time() を使ってください。")
+
+    def until(self, *args, **kwargs):
+        raise TypeError("AudioView.until() は禁止です。clip.until() を使ってください。")
 
 
 # --- Transform関数 ---
@@ -1156,6 +1494,43 @@ def move(**kwargs):
     if "anchor" in kwargs:
         resolved["anchor"] = kwargs["anchor"]
     return Effect("move", **resolved)
+
+
+# --- 音声エフェクト関数 ---
+
+def again(value=1.0):
+    """音量倍率"""
+    return AudioEffect("again", value=_resolve_param(value))
+
+
+def afade(alpha=1.0):
+    """音量フェード"""
+    return AudioEffect("afade", alpha=_resolve_param(alpha))
+
+
+def adelete():
+    """音声をミックスから除外"""
+    return AudioEffect("adelete")
+
+
+def delete():
+    """映像をオーバーレイから除外"""
+    return Effect("delete")
+
+
+def trim(duration=None):
+    """映像トリム（時間影響あり）"""
+    return Effect("trim", duration=duration)
+
+
+def atrim(duration=None):
+    """音声トリム（時間影響あり）"""
+    return AudioEffect("atrim", duration=duration)
+
+
+def atempo(rate=1.0):
+    """音声テンポ変更（時間影響あり）"""
+    return AudioEffect("atempo", rate=rate)
 
 
 # --- アンカー/同期 ---

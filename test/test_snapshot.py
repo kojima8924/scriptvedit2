@@ -188,6 +188,30 @@ def setup_test15():
             os.rmdir(cache_dir)
 
 
+def setup_test16():
+    """音声ミックステスト: BGM(mp3) + 画像+SE"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test16_bgm.py", priority=0)
+    p.layer("test16_oni.py", priority=1)
+    return p.render("test16.mp4", dry_run=True)
+
+def setup_test17():
+    """AV splitテスト: 音声なし動画 + 音声のみ"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="darkgreen")
+    p.layer("test17_video_split.py", priority=0)
+    p.layer("test17_audio.py", priority=1)
+    return p.render("test17.mp4", dry_run=True)
+
+def setup_test18():
+    """length()テスト: ffprobeで取得した長さを使用"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="gray")
+    p.layer("test18_length.py", priority=0)
+    return p.render("test18.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -204,6 +228,9 @@ ALL_TESTS = [
     ("test13", setup_test13),
     ("test14", setup_test14),
     ("test15", setup_test15),
+    ("test16", setup_test16),
+    ("test17", setup_test17),
+    ("test18", setup_test18),
 ]
 
 
