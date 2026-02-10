@@ -1,101 +1,137 @@
 ============================================================
   scriptvedit2 プロジェクト状況レポート (Claude Code → ChatGPT)
-  作成日: 2026-02-10
+  作成日: 2026-02-11
+  最終コミット: e39e49a
 ============================================================
 
-■ プロジェクト概要
+============================================================
+1. プロジェクト概要
+============================================================
+
   Python DSL で動画を構成し ffmpeg でレンダリングするツール。
   「1ファイル = 1レイヤー」アーキテクチャを採用。
   main.py がオーケストレータ、各レイヤーは独立した .py ファイル。
 
-■ ファイル構成
-  scriptvedit2/
-  ├── scriptvedit.py   ← コアライブラリ (876行)
-  ├── main.py          ← オーケストレータ (デモ用)
-  ├── bg.py            ← 背景レイヤー (デモ用)
-  ├── onigiri.py       ← おにぎりレイヤー (デモ用)
-  ├── test/            ← テスト01〜12 (各test##_main.py + レイヤーファイル群)
-  └── *.png, *.jpg     ← 素材画像 (変更禁止)
+  コアファイル: scriptvedit.py (約2150行)
+  ライセンス: なし（個人プロジェクト）
+  環境: Windows 11 / Python 3.10 / ffmpeg 8.0-full_build
 
-■ コミット履歴 (古い順)
-  9ea9b69 初期コミット: DSLベースの動画構成ツール
-  161ee8f プリセット記法の追加とTransform関数からtarget引数を除去
-  84750c6 DSLを <= 演算子に統一（破壊的変更）
-  129c334 レイヤー記法を obj.time(6) <= effect_chain の1行形式に統一
-  0c12e42 pos廃止→move Effect統合、media_type導入、cache機能追加
-  72a91bf 画像キャッシュの透過対応と1ファイル1レイヤーテスト10件追加
-  d44a0b3 anchor/pause/until機能と2パスアーキテクチャを追加
-  3fc1416 Expr式ビルダー導入: Effect引数をfloat/lambda(u)/Expr統一（破壊的変更）
-  6b09de3 layer()遅延化と2パスplan/render分離: アンカー解決の堅牢化
+  ◆ ファイル構成
+    scriptvedit2/
+    ├── scriptvedit.py   ← コアライブラリ (約2150行)
+    ├── main.py          ← オーケストレータ (デモ用)
+    ├── bg.py            ← 背景レイヤー (デモ用)
+    ├── onigiri.py       ← おにぎりレイヤー (デモ用)
+    ├── README.md        ← プロジェクト説明
+    ├── Report_for_ChatGPT.txt ← 本レポート
+    ├── templates/
+    │   ├── subtitle.html      ← 字幕テンプレート
+    │   ├── bubble.html        ← 吹き出しテンプレート
+    │   └── diagram_svg.html   ← SVG図解テンプレート
+    ├── test/
+    │   ├── test_snapshot.py   ← スナップショットテスト (22テスト)
+    │   ├── test_errors.py     ← エラーケーステスト (22テスト)
+    │   ├── render_all.py      ← 全テスト動画の実レンダリング
+    │   ├── snapshots/         ← スナップショットJSON (test01〜test22)
+    │   ├── test01〜test22_main.py + レイヤーファイル群
+    │   ├── test19_scene.html  ← web Objectテスト用HTML
+    │   └── *.png, *.jpg       ← テスト用素材
+    ├── *.png, *.jpg     ← 素材画像 (変更禁止)
+    ├── *.mp4            ← 素材動画
+    └── *.mp3            ← 素材音声
 
-============================================================
-■ 【最新】 layer()遅延化と2パスplan/render分離 (6b09de3)
-============================================================
-
-  ★ render()がplan pass→render passの2段階になった。
-
-  ◆ 変更内容
-    1. layer() は登録のみ（遅延実行）
-       - 旧: layer()呼び出し時にexec()でレイヤーファイルを即実行
-       - 新: (filename, priority) を _layer_files に記録するだけ
-       - 実際の実行は render() 内で _exec_layer() 経由
-
-    2. render() が2パス構成に
-       - Plan pass: _plan_resolve() → アンカーの固定点反復解決
-         - cache() は no-op（selfを返す。タイミング計算のみ）
-         - _resolve_anchors(check_unresolved=False) で反復解決
-         - アンカー値が収束するまで繰り返し（最大 len(files)+2 回）
-       - Render pass: 本実行
-         - anchors確定済みの状態でレイヤーを再実行
-         - cache() は通常動作（ファイル出力）
-         - _resolve_anchors(check_unresolved=True) で最終確認
-
-    3. anchor() に同名重複チェック追加
-       - _anchor_defined_in で定義元ファイルを記録
-       - 同一ファイル内の再定義はOK（plan反復で発生するため）
-       - 異なるファイルからの同名定義は RuntimeError
-
-    4. 未定義アンカーの診断改善
-       - 参照先と定義済みアンカー一覧を表示
-
-  ◆ 内部メソッド
-    _plan_resolve()     ... 固定点反復でアンカー解決（plan pass本体）
-    _exec_layer(f, p)   ... レイヤーファイルfをexec実行
-    _mode               ... "plan" or "render"（cache動作を制御）
-    _layer_files         ... [(filename, priority)] の登録リスト
-    _anchor_defined_in  ... {name: filename} の診断情報
-    _current_layer_file ... 実行中のファイル名
+  ◆ コミット履歴 (古い順)
+    9ea9b69 初期コミット: DSLベースの動画構成ツール
+    161ee8f プリセット記法の追加とTransform関数からtarget引数を除去
+    84750c6 DSLを <= 演算子に統一（破壊的変更）
+    129c334 レイヤー記法を obj.time(6) <= effect_chain の1行形式に統一
+    0c12e42 pos廃止→move Effect統合、media_type導入、cache機能追加
+    72a91bf 画像キャッシュの透過対応と1ファイル1レイヤーテスト10件追加
+    d44a0b3 anchor/pause/until機能と2パスアーキテクチャを追加
+    3fc1416 Expr式ビルダー導入: Effect引数をfloat/lambda(u)/Expr統一（破壊的変更）
+    6b09de3 layer()遅延化と2パスplan/render分離: アンカー解決の堅牢化
+    955233f レビュー指摘全件改修: 重複排除・テスト強化・堅牢化
+    f3c0192 レイヤーキャッシュ(webm alpha) + DSL糖衣(P/%・~無効化)の3機能追加
+    db63456 音声合成(amix) + AV split + length() + AudioEffect基盤の大型拡張
+    d2ae888 web Object機能追加: HTMLテンプレート→透明webm(VP9 alpha)→合成パイプライン
+    8132e4b テンプレート機能(subtitle/bubble/diagram) + scaleアニメーション振動修正
+    e39e49a チェックポイントキャッシュ記法を追加 ← 最新
 
 ============================================================
-■ Expr式ビルダー (3fc1416)
+2. 主要クラスとAPI（全クラス・全ファクトリ関数の一覧と説明）
 ============================================================
 
-  ★破壊的変更: Effect引数のセマンティクスが変わった。
+  ◆ コアクラス
+    Project          ... プロジェクト管理。configure/layer/renderを提供
+    Object           ... 素材（画像/動画/音声/web）を表現。Transform/Effect/AudioEffectを適用
+    Transform        ... 静的変換（resize等）。name + params辞書
+    TransformChain   ... 複数のTransformを | で連結したチェーン
+    Effect           ... 時間的エフェクト（move/scale/fade/trim/delete）。name + params辞書
+    EffectChain      ... 複数のEffectを & で連結したチェーン
+    AudioEffect      ... 音声エフェクト（again, afade, adelete, atrim, atempo等）。name + params辞書
+    AudioEffectChain ... 複数のAudioEffectを & で連結したチェーン
+    VideoView        ... split()で生成。映像系(Transform/Effect)のみ受け付けるビュー
+    AudioView        ... split()で生成。音声系(AudioEffect)のみ受け付けるビュー
 
-  旧仕様:
-    scale(0.5)      → 0.5→1.0にアニメーション
-    fade(alpha=0)    → 0→1にフェードイン
+  ◆ チェックポイントクラス（~演算子/+演算子で生成） 【e39e49aで追加】
+    _CheckpointTransform  ... Transform/TransformChainのチェックポイントラッパー
+                              mode="auto"(~) or "make"(+)
+    _CheckpointEffect     ... Effect/EffectChainのチェックポイントラッパー
+                              mode="auto"(~) or "make"(+)
+    _DisabledAudioEffect  ... AudioEffect/AudioEffectChainの無効化ラッパー（~で生成）
 
-  新仕様:
-    scale(0.5)                        → 定数0.5倍（アニメーションなし）
-    scale(lambda u: lerp(0.5, 1, u))  → 0.5→1.0にアニメーション（旧動作の再現）
-    fade(0.5)                         → 定数0.5の不透明度
-    fade(lambda u: u)                 → 0→1にフェードイン（旧動作の再現）
+  ◆ アンカー/同期クラス
+    _AnchorMarker    ... anchor()で生成。タイムライン上の位置を記録（非描画）
+    Pause            ... pause.time(N)/pause.until(name)で生成。時間のみ占有（非描画）
+    _PauseFactory    ... pauseシングルトンの型。time()/until()メソッドを持つ
 
-  ◆ Exprクラス群
-    Expr        ... 基底クラス。演算子オーバーロード (+,-,*,/,**,neg,abs)
-    Const(v)    ... 定数ノード → "v"
-    Var("u")    ... 変数ノード → u_expr (正規化時間0〜1)
-    _BinOp      ... 二項演算 → "(left op right)"
-    _UnOp       ... 単項演算 → "(op x)"
-    _FuncCall   ... 関数呼び出し → "name(arg1\,arg2\,...)"
+  ◆ Expr（式ビルダー）クラス
+    Expr             ... 基底クラス。四則演算・べき乗の演算子オーバーロード
+    Const            ... 定数ノード (float/int)
+    Var              ... 変数ノード ("u" = 正規化時間)
+    _BinOp           ... 二項演算ノード (+, -, *, /)
+    _UnOp            ... 単項演算ノード (-)
+    _FuncCall        ... 関数呼び出しノード (sin, cos, lerp等)
 
-  ◆ _resolve_param(param)
-    float/int   → Const(param)
-    lambda(u)   → lambdaにVar("u")を渡してExpr式木を構築
-    Expr        → そのまま
+  ◆ DSL糖衣クラス
+    Percent          ... パーセント記法。P はシングルトンインスタンス
 
-  ◆ 数学関数（from scriptvedit import * で使用可能）
+  ◆ ファクトリ関数（映像Transform）
+    resize(sx=倍率, sy=倍率)   ... スケーリング Transform
+
+  ◆ ファクトリ関数（映像Effect）
+    move(x, y, anchor, from_x, from_y, to_x, to_y) ... 位置/移動アニメーション
+    scale(value)               ... 拡大縮小 (float=定数, lambda=アニメーション)
+    fade(alpha)                ... 不透明度 (float=定数, lambda=アニメーション)
+    trim(duration)             ... 映像トリム（時間影響あり）
+    delete()                   ... 映像をオーバーレイから除外
+
+  ◆ ファクトリ関数（音声AudioEffect）
+    again(value)               ... 音量倍率 (float=定数, lambda=アニメーション)
+    afade(alpha)               ... 音量フェード (float=定数, lambda=アニメーション)
+    atrim(duration)            ... 音声トリム（時間影響あり）
+    atempo(rate)               ... 音声テンポ変更（時間影響あり）
+    adelete()                  ... 音声をミックスから除外
+
+  ◆ アンカー/同期関数
+    anchor(name)               ... 現在のレイヤー位置にアンカーを登録
+    pause (シングルトン)
+      pause.time(N)            ... N秒だけ時間を占有（Pauseを生成・登録）
+      pause.until(name)        ... アンカーまで待機（Pauseを生成・登録）
+
+  ◆ テンプレートラッパー関数
+    subtitle(text, who, duration, style, size, name, debug_frames)
+    bubble(text, duration, anchor, pos, box, style, size, name, debug_frames)
+    diagram(objects, duration, style, size, name, debug_frames)
+
+  ◆ 図形ビルダー関数
+    circle(x, y, r, **kw)     ... 円オブジェクト定義（diagram用）
+    rect(x, y, w, h, **kw)    ... 矩形オブジェクト定義（diagram用）
+    arrow(x1, y1, x2, y2, **kw) ... 矢印オブジェクト定義（diagram用）
+    label(x, y, text, **kw)   ... テキストラベル定義（diagram用）
+    spotlight(x, y, r, **kw)  ... スポットライト暗幕くり抜き定義（diagram用）
+
+  ◆ Expr数学関数（from scriptvedit import * で使用可能）
     三角:       sin, cos, tan, asin, acos, atan, atan2
     双曲線:     sinh, cosh, tanh
     指数/対数:  exp, log, sqrt, log10, cbrt
@@ -104,29 +140,28 @@
     クランプ:   clip(x, lo, hi), clamp (エイリアス)
     ステップ:   step(edge, x), smoothstep(edge0, edge1, x)
     その他:     mod(a, b), frac(x), deg2rad(x), rad2deg(x)
-    組み込み互換: abs, min, max, round, pow
-      → Expr引数ならffmpeg式生成、通常値ならPython組み込み動作
-    定数:       PI = 3.141592653589793, E = 2.718281828459045
+    組み込み互換: abs, min, max, round, pow（Expr/float両対応）
+    定数:       PI, E
 
-  ◆ DSL使用例
-    # 定数スケール（新しいセマンティクス）
-    obj.time(5) <= scale(0.5)
+  ◆ Objectの主要メソッド
+    obj.time(duration)     ... 表示時間を設定し、selfを返す
+    obj.until(name)        ... durationをアンカー時刻まで伸長し、selfを返す
+    obj.cache(path)        ... 単体レンダしてキャッシュファイル生成、新Objectを返す
+    obj.length()           ... 加工後の再生時間を返す（ffprobe + trim/atrim/atempo反映）
+    obj.split()            ... (VideoView or None, AudioView or None) を返す
+    Object.load_cache(path) ... キャッシュファイルからObjectを生成（クラスメソッド）
 
-    # アニメーション（lambda形式）
-    obj.time(5) <= scale(lambda u: lerp(0.5, 1, u))
+  ◆ Projectの主要メソッド
+    p.configure(**kwargs)  ... width, height, fps, duration, background_color を設定
+    p.layer(filename, priority, cache) ... レイヤーファイルを登録
+    p.render(output_path, dry_run=False) ... レンダリング実行（dry_run=Trueでコマンドのみ返却）
+    p.render_object(obj, output_path)    ... 単体Objectをレンダリング
 
-    # sin波フェード（フェードイン→フェードアウト）
-    obj.time(4) <= fade(lambda u: sin(u * PI))
-
-    # lambda move
-    obj.time(4) <= move(x=lambda u: lerp(0.2, 0.8, u), y=0.5, anchor="center")
-
-  ◆ move() の from/to 引数
-    move(from_x=0.1, to_x=0.9, ...) は内部で
-    lerp(0.1, 0.9, u) の Expr に自動変換される（後方互換）
+  ◆ Exprの数値評価メソッド
+    expr.eval_at(u_value)  ... Expr式をPythonで数値評価（u=u_valueとして計算）
 
 ============================================================
-■ DSL記法 (現在の最新仕様)
+3. DSL文法概要
 ============================================================
 
   ◆ オーケストレータ (main.py)
@@ -134,143 +169,321 @@
     p = Project()
     p.configure(width=1280, height=720, fps=30, background_color="black")
     p.layer("bg.py", priority=0)
+    p.layer("maku.py", priority=0, cache="make")
     p.layer("onigiri.py", priority=1)
     p.render("output.mp4")
 
   ◆ レイヤーファイル (1ファイル=1レイヤー)
     from scriptvedit import *
     obj = Object("image.png")
-    obj <= resize(sx=0.3, sy=0.3)
+    obj <= resize(sx=50%P, sy=50%P)       # パーセント記法
     obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
                    & scale(lambda u: lerp(0.5, 1, u)) \
                    & fade(lambda u: u)
 
-  ◆ 演算子
+  ◆ <= 演算子 (Object.__le__)
+    Objectに対してTransform/Effect/AudioEffectを適用する中心的な演算子。
     obj <= Transform/TransformChain     ... Transform適用 (resize等)
-    obj.time(N) <= Effect/EffectChain   ... 時間+Effect適用 (move, scale, fade)
-    Transform | Transform               ... TransformChain
-    Effect & Effect                      ... EffectChain
+    obj.time(N) <= Effect/EffectChain   ... 時間+Effect適用 (move, scale, fade等)
+    obj <= AudioEffect/AudioEffectChain ... AudioEffect適用 (again, afade等)
 
-  ◆ Transform関数
-    resize(sx=倍率, sy=倍率)
+  ◆ | チェーン (TransformChain)
+    resize(sx=0.5, sy=0.5) | resize(sx=2, sy=2)  → TransformChain
 
-  ◆ Effect関数
-    move(x=0.5, y=0.5, anchor="center")             ... 固定位置
-    move(x=lambda u: ..., y=0.5, anchor="center")   ... lambda位置
-    move(from_x=0.1, to_x=0.9, anchor="center")     ... from/toアニメーション
-    scale(value)                ... 定数スケール
-    scale(lambda u: expr)       ... lambda式スケール
-    fade(alpha)                 ... 定数不透明度
-    fade(lambda u: expr)        ... lambda式フェード
+  ◆ & チェーン (EffectChain / AudioEffectChain)
+    move(...) & scale(...) & fade(...)   → EffectChain
+    again(0.8) & afade(lambda u: u)      → AudioEffectChain
 
-  ◆ キャッシュ機能
-    cached = obj.cache("cache.png")         ... 透過PNG出力 (背景なし)
-    cached = obj.cache("cache.mp4")         ... 動画出力 (背景あり)
+  ◆ ~ チェックポイント演算子 (auto) 【e39e49aで変更】
+    ~resize(...)       → _CheckpointTransform(mode="auto")
+    ~scale(...)        → _CheckpointEffect(mode="auto")
+    ~(tf1 | tf2)       → TransformChain 末尾にautoチェックポイント付与
+    ~(eff1 & eff2)     → EffectChain 末尾にautoチェックポイント付与
+    ※ autoモード: キャッシュが存在すれば再利用、なければ生成
+
+  ◆ + チェックポイント演算子 (make) 【e39e49aで追加】
+    +resize(...)       → _CheckpointTransform(mode="make")
+    +scale(...)        → _CheckpointEffect(mode="make")
+    +(tf1 | tf2)       → TransformChain 末尾にmakeチェックポイント付与
+    ※ makeモード: 常に再生成
+
+  ◆ - 演算子 (禁止) 【e39e49aで追加】
+    -resize(...)       → TypeError("Transform に - 演算子は使えません")
+    -scale(...)        → TypeError("Effect に - 演算子は使えません")
+
+  ◆ ~ AudioEffect無効化 (従来動作を維持)
+    ~again(...)        → _DisabledAudioEffect（Object.__le__でスキップ）
+
+  ◆ %P パーセント記法
+    50%P  → 0.5   (Percentクラスの __rmod__)
+    100%P → 1.0
+
+  ◆ split() メソッド
+    clip = Object("video.mp4")
+    v, a = clip.split()
+    v <= resize(sx=0.5, sy=0.5)           # 映像系のみOK
+    a <= again(0.5) & afade(lambda u: u)   # 音声系のみOK
+
+  ◆ length() メソッド
+    clip = Object("video.mp4")
+    clip.time(clip.length())   # ffprobeで取得した長さを使用
+
+  ◆ delete / adelete
+    obj <= delete()    ... 映像をオーバーレイから除外（音声は残る）
+    obj <= adelete()   ... 音声をミックスから除外（映像は残る）
+
+  ◆ anchor/pause/until
+    anchor("name")                     ... アンカー登録
+    pause.time(N)                      ... 時間だけ占有
+    pause.until("name")                ... アンカーまで待機
+    obj.until("name")                  ... durationをアンカーまで伸長
+
+  ◆ レイヤーキャッシュ
+    p.layer("maku.py", cache="make")   ... VP9 alpha webmキャッシュ生成
+    p.layer("maku.py", cache="use")    ... キャッシュから読み込み
+    p.layer("maku.py", cache="auto")   ... 存在時利用/なければ通常
+    p.layer("maku.py", cache="off")    ... 従来通り（デフォルト）
+
+  ◆ 単体キャッシュ (Object.cache)
+    cached = obj.cache("cache.png")    ... 透過PNG出力
+    cached = obj.cache("cache.mp4")    ... 動画出力
     cached.time(5) <= move(...) & scale(...)
-    ※ planモードではno-op（selfを返す）
 
 ============================================================
-■ anchor/pause/until 機能
+4. チェックポイントキャッシュ 【e39e49aで追加】
 ============================================================
 
-  ◆ anchor(name)
-    レイヤー内の現在の累積時刻を名前付きアンカーとして登録。
-    異なるファイルからの同名定義は禁止（RuntimeError）。
+  ◆ 概要
+    Transform/Effectチェーン内の中間生成物を自動保存・復元する仕組み。
+    ~ (auto) / + (make) の単項演算子でチェックポイントを指定し、
+    __cache__/checkpoints/ 以下にPNG(画像) / WebM(動画VP9 alpha)で保存する。
+    既存の obj.cache(path) は明示保存として残る。チェックポイントは内部自動キャッシュ。
 
-  ◆ pause.time(N) / pause.until(name)
-    非描画タイムラインアイテム。時間占有のみ。
+  ◆ 使用例
+    obj = Object("image.png")
+    obj <= ~resize(sx=0.3, sy=0.3)       # resize適用後のPNGをチェックポイント保存
+    obj.time(3) <= move(x=0.5, y=0.5, anchor="center") \
+                   & scale(lambda u: lerp(0.8, 1, u))
+    # → resize済みPNGをキャッシュ、次回は復元してscale+moveのみ実行
 
-  ◆ obj.until(name)
-    durationをアンカー時刻まで伸長。
+  ◆ autoモード (~op)
+    キャッシュが存在すれば再利用、存在しなければ生成。
+    2回目以降のレンダリングが高速化される。
+    ~resize(...), ~scale(...), ~fade(...) 等、全Transform/Effectに使用可能。
 
-  ◆ 2パスアーキテクチャ（6b09de3で改善）
-    render()
-      → _plan_resolve() [plan pass: 固定点反復でアンカー解決]
-      → _exec_layer() × N [render pass: anchors確定済みで本実行]
-      → _resolve_anchors() [最終アンカー解決]
-      → _build_ffmpeg_cmd() [ffmpegコマンド構築]
+  ◆ makeモード (+op)
+    常に再生成。キャッシュを強制更新する場合に使用。
+    +resize(...), +scale(...) 等。
 
-============================================================
-■ クラス構成 (scriptvedit.py 876行)
-============================================================
+  ◆ 糖衣構文 (チェーン全体への適用)
+    ~(tf1 | tf2 | tf3)   → tf1 | tf2 | ~tf3（末尾にautoチェックポイント）
+    +(eff1 & eff2)        → eff1 & +eff2（末尾にmakeチェックポイント）
 
-  Expr系 (L8-131):
-  Expr, Const, Var, _BinOp, _UnOp, _FuncCall, _to_expr, _resolve_param
+  ◆ キャッシュ保存先
+    __cache__/checkpoints/ ディレクトリ以下
+    ファイル名はソースパス + 適用済みops列のSHA256ハッシュ先頭16文字
+    画像→ .png、動画（effectあり）→ .webm (VP9 alpha)
 
-  数学関数 (L134-248):
-  sin, cos, tan, ... lerp, clip, smoothstep, ... abs, min, max, round, pow
-  PI, E
+  ◆ 復元ロジック (_find_resume_point)
+    ~ (auto) のチェックポイントのみ復元対象。
+    + (make) より左側の ~ のみが復元候補。
+    右端から探索し、キャッシュファイルが存在する最右の~を復元点とする。
 
-  Project (L266-612):
-  layer(), _exec_layer(), render(), _plan_resolve(),
-  render_object(), _build_ffmpeg_cmd(),
-  _build_video_cache_cmd(), _build_image_cache_cmd(), _resolve_anchors()
+  ◆ dry_run時の動作
+    _collect_checkpoint_cmds() でffmpegコマンドを収集。
+    obj.source をチェックポイントパスに差し替え。
+    返り値: {"main": [...], "cache": {"__cache__/checkpoints/KEY.ext": [...]}}
 
-  _build_move_exprs() (L615-644)
-  TransformChain, EffectChain, Transform, Effect (L647-712)
-  _AnchorMarker, Pause, Object (L715-811)
+  ◆ 実行時の動作
+    _ensure_checkpoints() → _process_checkpoints() で各Objectを処理。
+    チェックポイント地点でffmpegを実行して中間結果を保存。
+    obj.source を最後のチェックポイントに差し替え、残余opsを再設定。
 
-  ファクトリ関数 (L814-848):
-  resize(), scale(), fade(), move()
+  ◆ AudioEffectは対象外
+    AudioEffectの ~ は従来通り無効化(_DisabledAudioEffect)として動作。
+    チェックポイントは映像Transform/Effectのみ。
 
-  アンカー/同期 (L851-876):
-  anchor(), _PauseFactory, pause
-
-============================================================
-■ テスト一覧 (test/ ディレクトリ)
-============================================================
-
-  test01: bg(石垣)+おにぎり対角移動+fade          5秒 darkred
-  test02: 定式幕+cafe scale+fade                  4秒 black
-  test03: 3レイヤーmoveアニメーション               5秒 black
-  test04: 画像キャッシュ透過テスト                  3秒 white
-  test05: 静的表示(エフェクトなし)                  2秒 green
-  test06: 大スケール 3.0→1.0                       3秒 olive
-  test07: 3レイヤー横並び                           4秒 navy
-  test08: from/to アニメーション左→右               5秒 darkgreen
-  test09: 4レイヤー四隅→中央                        4秒 gray
-  test10: 画像キャッシュ+動画合成                    5秒 purple
-  test11: anchor/pause.until クロスレイヤー同期      6秒 darkblue
-  test12: Expr機能検証(sin波fade/lambda scale/move) 4秒 darkslategray
-
-  ※ test01〜11は lambda形式に移行済み（旧アニメーション動作を再現）
-  ※ test12はExpr新機能のデモ
-  ※ 全テスト test01〜12 + メインデモ 2パス構成で動作確認済み
+  ◆ 破壊的変更: ~演算子の意味変更
+    旧: ~op → 無効化（Object.__le__でスキップ）
+    新: ~op → autoチェックポイント（中間結果を保存・復元）
+    ※ AudioEffectの~は無効化のまま変更なし
 
 ============================================================
-■ 既知の制約・注意点
+5. テンプレート機能
+============================================================
+
+  ◆ 概要
+    よく使うwebレイヤー（字幕・吹き出し・図解）をPython関数1行で生成。
+    内部でweb Object (HTML→Playwright→webm) パイプラインを利用。
+    templates/ ディレクトリ内のHTMLがテンプレートとして機能。
+
+  ◆ subtitle(text, who, duration, style, size, name, debug_frames)
+    画面下部に表示する字幕バー。
+  ◆ bubble(text, duration, anchor, pos, box, style, size, name, debug_frames)
+    しっぽ付き吹き出し。
+  ◆ diagram(objects, duration, style, size, name, debug_frames)
+    SVG図解。複数の図形オブジェクトを組み合わせて描画。
+
+============================================================
+6. web Object機能（HTMLテンプレート→透明webm→合成）
+============================================================
+
+  HTMLテンプレートをPlaywrightで連番PNGにキャプチャし、
+  ffmpegで透明webm(VP9/yuva420p)に変換し、通常のObjectとして合成する。
+
+  処理フロー:
+    scene.html + data → Playwright(renderFrame) → PNGシーケンス
+    → ffmpeg → __cache__/webclip/name.webm → Object(video)として合成
+
+============================================================
+7. 音声機能（AudioEffect、amix、adelay、split、delete/adelete）
+============================================================
+
+  ◆ AudioEffect クラス
+    音声エフェクトの基底。name + params辞書で構成。
+    & 演算子で AudioEffectChain に連結可能。
+    ~ 演算子で _DisabledAudioEffect に無効化可能。
+
+  ◆ 音声ファクトリ関数
+    again(value=1.0)      ... 音量倍率
+    afade(alpha=1.0)      ... 音量フェード
+    atrim(duration=None)  ... 音声トリム
+    atempo(rate=1.0)      ... テンポ変更
+    adelete()             ... 音声をミックスから除外
+
+============================================================
+8. ffmpegコマンド生成の仕組み
+============================================================
+
+  _build_ffmpeg_cmd(output_path) が最終的なffmpegコマンドリストを生成。
+  入力0: 背景色ベースキャンバス (color=c=...)
+  入力1〜N: 各Objectのソースファイル
+
+  ◆ 映像チェーン
+    各Objectに対し Transform → Effect → overlay で順次合成。
+    scaleアニメーション時はpad固定化で振動を防止。
+
+  ◆ 音声チェーン
+    AudioEffect適用 → adelay → amix で合成。
+
+  ◆ 出力コーデック
+    映像: libx264, yuv420p
+    音声: aac
+    キャッシュ/チェックポイント: libvpx-vp9, yuva420p（アルファ対応webm）
+
+============================================================
+9. Plan/Render 2パスアーキテクチャ
+============================================================
+
+  render() の実行フロー:
+    1. _reset_runtime_state()
+    2. _validate_cache_specs()
+    3. _plan_resolve() (Plan pass: アンカー解決)
+    4. Render pass: 各レイヤー実行
+    5. _resolve_anchors()
+    6. duration計算
+    7. dry_run分岐:
+       True:  _collect_cache_cmds + _collect_web_cmds + _collect_checkpoint_cmds
+       False: _ensure_checkpoints → _ensure_web_objects → ffmpeg実行
+
+============================================================
+10. テスト一覧
+============================================================
+
+  ◆ スナップショットテスト (test_snapshot.py) - 22テスト
+    test01〜test21: 既存テスト（全PASS）
+    test22: チェックポイントキャッシュテスト                   3秒 black   【NEW】
+      - ~resize(sx=0.3, sy=0.3) でPNGチェックポイント保存
+      - チェックポイントPNGからscale+moveでメインパイプライン
+
+  ◆ エラーケーステスト (test_errors.py) - 22テスト
+    1〜19: 既存テスト
+    20. -Transform                → TypeError                   【NEW】
+    21. -Effect                   → TypeError                   【NEW】
+    22. ~chain糖衣                → 末尾_CheckpointTransform検証 【NEW】
+
+  ※ 全テスト test01〜22 + スナップショット22件 + エラーケース22件 全PASS確認済み
+
+============================================================
+11. 最新コミット (e39e49a) の変更内容
+============================================================
+
+  コミットメッセージ:
+    チェックポイントキャッシュ記法を追加: ~op(auto) / +op(make) で
+    Transform/Effect中間結果を自動保存・復元
+
+  ◆ _DisabledTransform/_DisabledEffect → _CheckpointTransform/_CheckpointEffect
+    - 旧: ~op で無効化ラッパー生成、Object.__le__でスキップ
+    - 新: ~op でautoチェックポイントラッパー生成、中間結果をキャッシュ
+    - _DisabledAudioEffect は変更なし（AudioEffectの~は無効化のまま）
+
+  ◆ Transform/Effect に演算子追加
+    - __invert__ (~): autoチェックポイント
+    - __pos__ (+): makeチェックポイント
+    - __neg__ (-): TypeError
+
+  ◆ TransformChain/EffectChain の糖衣構文
+    - ~(chain): 末尾要素にautoチェックポイント付与
+    - +(chain): 末尾要素にmakeチェックポイント付与
+
+  ◆ チェックポイント処理関数群
+    - _checkpoint_cache_path(): SHA256ハッシュベースのキャッシュパス計算
+    - _build_unified_ops(): transforms+effectsを統合ops列に変換
+    - _build_checkpoint_image_cmd(): 画像チェックポイント(PNG)のffmpegコマンド
+    - _build_checkpoint_video_cmd(): 動画チェックポイント(WebM VP9 alpha)のffmpegコマンド
+    - _process_checkpoints(): 実レンダ時の前方実行+チェックポイント保存
+    - _find_resume_point(): autoチェックポイントの復元点探索
+    - _ensure_checkpoints(): 全Objectのチェックポイント処理
+    - _collect_checkpoint_cmds(): dry_run用コマンド収集
+
+  ◆ render()統合
+    - dry_run: _collect_checkpoint_cmds()追加
+    - 実行: _ensure_checkpoints() を _ensure_web_objects() の前に追加
+
+  ◆ テスト
+    - test22_checkpoint.py 新規テストレイヤー
+    - test_snapshot.py に test22 追加（22テスト）
+    - test_errors.py に3ケース追加（22テスト）
+    - test13.json スナップショット更新（~fadeの意味変更に伴う）
+
+============================================================
+12. 既知の制限・注意事項
 ============================================================
 
   1. overlay の enable='between()' で t=0 ジャストが拾われない場合がある
-     (ffmpegの浮動小数点精度の問題)
-
-  2. cache() + until() の組み合わせ:
-     planモードではcache()はno-opになるためタイミング計算は正常動作。
-     ただしuntilで動的に決まるdurationの動画キャッシュは、
-     render pass時点でアンカー確定済みなので正しく生成される。
-
-  3. 同一レイヤー内のオブジェクトは順次タイムライン（直列配置）
-     並列配置（同時表示）するには別レイヤーファイルにする
-
-  4. anchor 循環参照の検出は未実装
-     （反復回数上限で無限ループは防止しているが、明示的エラーは出ない）
-     ※ 異なるファイルからの同名anchor定義はRuntimeErrorで検出
-
+  2. cache() + until() の組み合わせはplanモードで構造のみ作成
+  3. 同一レイヤー内のオブジェクトは直列配置（並列は別レイヤー）
+  4. anchor 循環参照の検出は未実装（反復回数上限+warnings.warn）
   5. Windows環境 (Python 3.10, ffmpeg 8.0) でのみテスト済み
-
-  6. lambda内でmath.sin等は使えない（Expr非対応）
-     scriptveditのsin, cos等を使うこと。エラーメッセージで案内される。
+  6. lambda内でmath.sin等は使えない → scriptveditのsin, cos等を使うこと
+  7. レイヤーキャッシュはプロジェクト全体duration分
+  8. has_audioの判定はffprobeに依存
+  9. amixのnormalize=0固定
+  10. f-string内にバックスラッシュは使えない
+  11. web Object は Playwright が必要
+  12. web Object のキャッシュ判定は webm の存在のみ
+  13. eval_at()は基本的な数学関数のみ対応
+  14. テンプレートHTMLの座標系は正規化値(0.0〜1.0)
+  15. ~演算子の意味変更: Transform/Effectでは無効化→チェックポイントに変更
+      AudioEffectの~は無効化のまま
 
 ============================================================
 ■ 素材ファイル (変更禁止)
 ============================================================
 
-  bg_pattern_ishigaki.jpg          石垣模様の背景
-  onigiri_tenmusu.png              天むすおにぎり (透過PNG)
-  figure_cafe.png                  カフェの人物 (透過PNG)
-  pattern_teishiki_maku.png        定式幕 (緑/橙/黒の縦縞)
-  pop_shinsyakaijin_ganbare.png    がんばれポップ (透過PNG)
-  virus_message_fuyoufukyu_gaisyutsu.png  ウイルスメッセージ (透過PNG)
+  bg_pattern_ishigaki.jpg                        石垣模様の背景
+  onigiri_tenmusu.png                            天むすおにぎり (透過PNG)
+  figure_cafe.png                                カフェの人物 (透過PNG)
+  pattern_teishiki_maku.png                      定式幕 (緑/橙/黒の縦縞)
+  pop_shinsyakaijin_ganbare.png                  がんばれポップ (透過PNG)
+  virus_message_fuyoufukyu_gaisyutsu.png         ウイルスメッセージ (透過PNG)
+  Impact-38.mp3                                  インパクト音BGM
+  ビックリ音.mp3                                   効果音SE
+  fox_noaudio.mp4                                キツネ動画（音声なし）
+  flowerbg_noaudio.mp4                           花背景動画（音声なし）
+  guitar_noaudio.mp4                             ギター動画（音声なし）
+  free-video1-sea-cafinet.mp4                    海の動画
+  free-video5-sky-cafinet.mp4                    空の動画
 
 ============================================================
 ■ 開発環境
@@ -279,6 +492,7 @@
   OS: Windows 11
   Python: 3.10
   ffmpeg: 8.0-full_build
+  Playwright: chromium (web Object / テンプレート用)
   Shell: Git Bash / PowerShell
 
 ============================================================

@@ -1,0 +1,43 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=1280x720:d=3:r=30",
+    "-loop",
+    "1",
+    "-r",
+    "30",
+    "-i",
+    "__cache__/checkpoints/e15f6c642982a937.png",
+    "-filter_complex",
+    "[1:v]scale=w='trunc(iw*((0.8+((1-0.8)*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+((1-0.8)*clip((t-0)/3/,0/,1))))/2)*2':eval=frame[obj1];[0:v][obj1]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1]",
+    "-map",
+    "[v1]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "3",
+    "test22.mp4"
+  ],
+  "cache": {
+    "__cache__/checkpoints/e15f6c642982a937.png": [
+      "ffmpeg",
+      "-y",
+      "-i",
+      "../onigiri_tenmusu.png",
+      "-vf",
+      "scale=iw*0.3:ih*0.3",
+      "-frames:v",
+      "1",
+      "-pix_fmt",
+      "rgba",
+      "__cache__/checkpoints/e15f6c642982a937.png"
+    ]
+  }
+}

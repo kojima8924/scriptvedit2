@@ -239,6 +239,14 @@ def setup_test21():
     return p.render("test21.mp4", dry_run=True)
 
 
+def setup_test22():
+    """チェックポイントキャッシュテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test22_checkpoint.py", priority=0)
+    return p.render("test22.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -261,6 +269,7 @@ ALL_TESTS = [
     ("test19", setup_test19),
     ("test20", setup_test20),
     ("test21", setup_test21),
+    ("test22", setup_test22),
 ]
 
 

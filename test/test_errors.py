@@ -5,6 +5,8 @@ from scriptvedit import (
     _resolve_param, Project, P, Object, VideoView, AudioView,
     again, move, fade, resize, AudioEffect, AudioEffectChain,
     subtitle, bubble, diagram, circle, label,
+    Transform, TransformChain, Effect, EffectChain,
+    _CheckpointTransform, _CheckpointEffect,
 )
 
 
@@ -307,6 +309,50 @@ def test_subtitle_with_explicit_size():
         Project._current = old
 
 
+def test_neg_transform():
+    """-resize() → TypeError"""
+    try:
+        _ = -resize(sx=0.5, sy=0.5)
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "Transform" in msg and "-" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_neg_effect():
+    """-scale(0.5) → TypeError"""
+    from scriptvedit import scale
+    try:
+        _ = -scale(0.5)
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "Effect" in msg and "-" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_chain_sugar():
+    """~(tf1 | tf2) の末尾がcheckpoint"""
+    tf1 = resize(sx=0.5, sy=0.5)
+    tf2 = resize(sx=0.3, sy=0.3)
+    chain = tf1 | tf2
+    result = ~chain
+    # result は TransformChain で、末尾が _CheckpointTransform(mode="auto")
+    if not isinstance(result, TransformChain):
+        return False, f"型が不正: {type(result)}"
+    last = result.transforms[-1]
+    if not isinstance(last, _CheckpointTransform):
+        return False, f"末尾が_CheckpointTransformでない: {type(last)}"
+    if last.mode != "auto":
+        return False, f"modeが不正: {last.mode}"
+    if result.transforms[0] is not tf1:
+        return False, "先頭がtf1でない"
+    return True, f"末尾=_CheckpointTransform(mode={last.mode})"
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -327,6 +373,9 @@ ALL_TESTS = [
     ("subtitle Project未設定", test_subtitle_no_project),
     ("diagram Project未設定", test_diagram_no_project),
     ("subtitle size明示", test_subtitle_with_explicit_size),
+    ("-Transform", test_neg_transform),
+    ("-Effect", test_neg_effect),
+    ("~chain糖衣", test_chain_sugar),
 ]
 
 

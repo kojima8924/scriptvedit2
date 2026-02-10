@@ -20,9 +20,11 @@ onigiri.py     ... 素材レイヤー
 - `|` (パイプ) ... Transform同士を連結して TransformChain を生成
 - `&` (アンド) ... Effect同士を連結して EffectChain を生成
 - `<=` (適用) ... Object に TransformChain / EffectChain を適用
+- `~` (チルダ) ... autoチェックポイント（中間結果を自動キャッシュ）
+- `+` (プラス) ... makeチェックポイント（中間結果を強制再生成）
 
 ```python
-obj <= resize(sx=0.3, sy=0.3)
+obj <= ~resize(sx=0.3, sy=0.3)    # resize結果をチェックポイント保存
 obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
                & scale(lambda u: lerp(0.5, 1, u)) \
                & fade(lambda u: u)
@@ -86,6 +88,25 @@ move(from_x=0.0, from_y=0.5, to_x=1.0, to_y=0.5, anchor="center")
 move(x=lambda u: lerp(0.2, 0.8, u), y=0.5, anchor="center")
 ```
 
+### チェックポイントキャッシュ
+
+Transform/Effectチェーン内の中間生成物を自動保存・復元する仕組み。
+`~op` (auto) / `+op` (make) の単項演算子でチェックポイントを指定。
+`__cache__/checkpoints/` 以下にPNG(画像) / WebM(動画)で保存される。
+
+```python
+# autoモード: キャッシュが存在すれば再利用、なければ生成
+obj <= ~resize(sx=0.3, sy=0.3)
+
+# makeモード: 常に再生成
+obj <= +resize(sx=0.3, sy=0.3)
+
+# チェーン全体への糖衣構文（末尾にチェックポイント付与）
+obj <= ~(resize(sx=0.5, sy=0.5) | resize(sx=0.3, sy=0.3))
+```
+
+AudioEffectの `~` は従来通り無効化として動作する。
+
 ### キャッシュ
 
 `Object.cache(path)` で単体レンダした結果をファイルに保存し、そのファイルを source に持つ新 Object を返す。
@@ -123,6 +144,26 @@ oni.time(3) <= move(x=0.5, y=0.5, anchor="center")
 - `pause.time(N)` ... N秒間の非描画待機
 - `pause.until(name)` ... アンカー時刻まで非描画待機
 - `obj.until(name)` ... durationをアンカー時刻まで伸長
+
+### テンプレート機能
+
+字幕・吹き出し・図解をPython関数1行で生成。内部でweb Object (HTML→Playwright→webm) パイプラインを利用。
+
+```python
+# 字幕
+s = subtitle("こんにちは！", who="Alice", duration=2.5)
+
+# 吹き出し
+b = bubble("ここがポイント！", duration=1.0, anchor=(0.6, 0.75))
+
+# 図解
+d = diagram([
+    rect(0.05, 0.1, 0.4, 0.25, fill="none", stroke="#fff"),
+    label(0.25, 0.22, "Step 1", fill="#fff"),
+    circle(0.7, 0.3, 0.06, fill="#ff6644"),
+    arrow(0.45, 0.22, 0.62, 0.3, stroke="#ffcc00"),
+], duration=3.0)
+```
 
 ### 2パスアーキテクチャ
 
@@ -180,15 +221,16 @@ python main.py
 ```python
 cmd = p.render("output.mp4", dry_run=True)
 # ffmpegを実行せず、コマンドリスト（list[str]）を返す
+# チェックポイント/キャッシュがある場合は {"main": [...], "cache": {...}} 形式
 ```
 
 ### テスト
 
 ```
 cd test
-python test_snapshot.py        # スナップショットテスト（ffmpeg式の回帰検出）
+python test_snapshot.py        # スナップショットテスト（22テスト）
 python test_snapshot.py --update  # スナップショット更新
-python test_errors.py          # エラーケーステスト
+python test_errors.py          # エラーケーステスト（22テスト）
 python test01_main.py          # 個別テスト（MP4生成）
 ```
 
@@ -196,3 +238,4 @@ python test01_main.py          # 個別テスト（MP4生成）
 
 - Python 3.10+
 - ffmpeg（PATHに必要）
+- Playwright + Chromium（テンプレート/web Object使用時）
