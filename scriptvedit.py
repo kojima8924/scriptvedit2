@@ -1,6 +1,28 @@
 import subprocess
 import os
+import warnings
 import builtins as _builtins
+
+__all__ = [
+    # コアクラス
+    "Project", "Object", "Transform", "TransformChain", "Effect", "EffectChain",
+    # ファクトリ関数
+    "resize", "scale", "fade", "move",
+    # アンカー/同期
+    "anchor", "pause",
+    # Expr
+    "Expr", "Const", "Var",
+    # 数学関数
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "sinh", "cosh", "tanh",
+    "exp", "log", "sqrt", "floor", "ceil", "trunc",
+    "log10", "cbrt", "lerp", "clip", "clamp",
+    "step", "smoothstep", "mod", "frac", "deg2rad", "rad2deg",
+    # Python組み込み互換
+    "abs", "min", "max", "round", "pow",
+    # 定数
+    "PI", "E",
+]
 
 
 # --- Expr（式ビルダー） ---
@@ -182,8 +204,10 @@ def ceil(x):
 def trunc(x):
     return _FuncCall("trunc", [_to_expr(x)])
 
+_LN10 = 2.302585092994046  # math.log(10)
+
 def log10(x):
-    return _FuncCall("log", [_to_expr(x)]) / Const(2.302585092994046)
+    return _FuncCall("log", [_to_expr(x)]) / Const(_LN10)
 
 def cbrt(x):
     return _FuncCall("pow", [_to_expr(x), Const(1/3)])
@@ -264,6 +288,11 @@ def _detect_media_type(path):
     return "image"  # フォールバック
 
 
+# --- configure許可キー ---
+
+_CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
+
+
 class Project:
     _current = None
 
@@ -272,6 +301,7 @@ class Project:
         self.height = 1080
         self.fps = 30
         self.duration = None
+        self._configured_duration = None
         self.background_color = "black"
         self.objects = []
         self._layers = []  # [(start_idx, end_idx, priority)]
@@ -283,8 +313,24 @@ class Project:
         Project._current = self
 
     def configure(self, **kwargs):
+        unknown = set(kwargs.keys()) - _CONFIGURE_KEYS
+        if unknown:
+            raise ValueError(
+                f"不明な設定キー: {', '.join(sorted(unknown))}。"
+                f"使用可能: {', '.join(sorted(_CONFIGURE_KEYS))}"
+            )
         for key, value in kwargs.items():
             setattr(self, key, value)
+        if "duration" in kwargs:
+            self._configured_duration = kwargs["duration"]
+
+    def _reset_runtime_state(self):
+        """render()用の実行時状態をリセット"""
+        self.duration = self._configured_duration
+        self.objects = []
+        self._layers = []
+        self._anchors = {}
+        self._anchor_defined_in = {}
 
     def layer(self, filename, priority=0):
         """レイヤーファイルを登録（実行はrender時に遅延）"""
@@ -347,14 +393,14 @@ class Project:
             if not changed:
                 break
         if check_unresolved:
-            # 未解決のuntilチェック
             for item in self.objects:
                 until_name = getattr(item, '_until_anchor', None)
                 if until_name and until_name not in self._anchors:
                     raise RuntimeError(f"未定義のアンカー: '{until_name}'")
 
-    def render(self, output_path):
-        # Plan pass: アンカー解決（cache=no-op、objects破棄）
+    def render(self, output_path, *, dry_run=False):
+        self._reset_runtime_state()
+        # Plan pass: アンカー解決（cache模擬、objects破棄）
         self._plan_resolve()
         # Render pass: 本実行（anchors確定済み）
         self.objects = []
@@ -366,6 +412,8 @@ class Project:
         if self.duration is None:
             self.duration = self._calc_total_duration()
         cmd = self._build_ffmpeg_cmd(output_path)
+        if dry_run:
+            return cmd
         print(f"実行コマンド:")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
         print()
@@ -374,7 +422,9 @@ class Project:
 
     def _plan_resolve(self):
         """Plan pass: 固定点反復でアンカーを解決"""
-        for iteration in range(len(self._layer_files) + 2):
+        converged = False
+        max_iterations = len(self._layer_files) + 2
+        for iteration in range(max_iterations):
             old_anchors = dict(self._anchors)
             self.objects = []
             self._layers = []
@@ -383,19 +433,36 @@ class Project:
                 self._exec_layer(filename, priority)
             self._resolve_anchors(check_unresolved=False)
             if self._anchors == old_anchors and iteration > 0:
+                converged = True
                 break
+        # 収束しなかった場合
+        if not converged and self._anchors:
+            warnings.warn(
+                f"アンカー解決が{max_iterations}回の反復で収束しませんでした。"
+                f"循環参照の可能性があります。\n"
+                f"定義済みアンカー: {dict(self._anchors)}"
+            )
         # 未解決のuntilチェック（診断付き）
         unresolved = []
         for item in self.objects:
             until_name = getattr(item, '_until_anchor', None)
             if until_name and until_name not in self._anchors:
-                unresolved.append(until_name)
+                unresolved.append((until_name, item))
         if unresolved:
-            names = ", ".join(f"'{n}'" for n in sorted(set(unresolved)))
+            names = ", ".join(f"'{n}'" for n in sorted(set(n for n, _ in unresolved)))
             defined = ", ".join(f"'{n}'" for n in sorted(self._anchors.keys())) or "(なし)"
+            details = []
+            for name, item in unresolved:
+                if isinstance(item, Pause):
+                    details.append(f"  pause.until('{name}')")
+                elif isinstance(item, Object):
+                    details.append(f"  Object('{item.source}').until('{name}')")
+                else:
+                    details.append(f"  {type(item).__name__}.until('{name}')")
             raise RuntimeError(
                 f"未定義のアンカーが参照されています: {names}\n"
-                f"定義済みアンカー: {defined}"
+                f"定義済みアンカー: {defined}\n"
+                f"参照元:\n" + "\n".join(details)
             )
 
     def render_object(self, obj, output_path, *, bg=None, fps=None):
@@ -406,10 +473,8 @@ class Project:
         is_image_out = _detect_media_type(output_path) == "image"
 
         if is_image_out:
-            # 画像キャッシュ: 背景なし、Transformのみ適用して透過PNG出力
             cmd = self._build_image_cache_cmd(obj, output_path)
         else:
-            # 動画キャッシュ: 背景あり、全Effect適用
             cmd = self._build_video_cache_cmd(obj, output_path, bg=bg, fps=fps, dur=dur)
 
         print(f"キャッシュ生成: {output_path}")
@@ -419,13 +484,7 @@ class Project:
 
     def _build_image_cache_cmd(self, obj, output_path):
         """画像キャッシュ: 背景なし、Transformのみ適用して透過PNG出力"""
-        filters = []
-        for t in obj.transforms:
-            if t.name == "resize":
-                sx = t.params.get("sx", 1)
-                sy = t.params.get("sy", 1)
-                filters.append(f"scale=iw*{sx}:ih*{sy}")
-
+        filters = _build_transform_filters(obj)
         cmd = ["ffmpeg", "-y", "-i", obj.source]
         if filters:
             cmd.extend(["-vf", ",".join(filters)])
@@ -437,45 +496,18 @@ class Project:
         inputs = []
         filter_parts = []
 
-        # [0] 背景色
         inputs.extend([
             "-f", "lavfi",
             "-i", f"color=c={bg}:s={self.width}x{self.height}:d={dur}:r={fps}",
         ])
 
-        # [1] ソース入力
         if obj.media_type == "image":
             inputs.extend(["-loop", "1", "-i", obj.source])
         else:
             inputs.extend(["-i", obj.source])
 
-        obj_filters = []
-
-        # Transform処理
-        for t in obj.transforms:
-            if t.name == "resize":
-                sx = t.params.get("sx", 1)
-                sy = t.params.get("sy", 1)
-                obj_filters.append(f"scale=iw*{sx}:ih*{sy}")
-
-        # Effect処理（moveを除く）
-        start = 0
-        for e in obj.effects:
-            if e.name == "scale":
-                scale_expr = e.params.get("value", Const(1))
-                u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
-                ffmpeg_str = scale_expr.to_ffmpeg(u_expr)
-                obj_filters.append(
-                    f"scale=w='trunc(iw*({ffmpeg_str})/2)*2':h='trunc(ih*({ffmpeg_str})/2)*2':eval=frame"
-                )
-            elif e.name == "fade":
-                alpha_expr = e.params.get("alpha", Const(1.0))
-                u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
-                ffmpeg_str = alpha_expr.to_ffmpeg(u_expr)
-                obj_filters.append("format=rgba")
-                obj_filters.append(
-                    f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
-                )
+        obj_filters = _build_transform_filters(obj)
+        obj_filters.extend(_build_effect_filters(obj, 0, dur))
 
         obj_label = "[obj1]"
         if obj_filters:
@@ -483,8 +515,7 @@ class Project:
         else:
             obj_label = "[1:v]"
 
-        # overlay位置（moveから取得）
-        x_expr, y_expr = _build_move_exprs(obj, start, dur)
+        x_expr, y_expr = _build_move_exprs(obj, 0, dur)
 
         out_label = "[vout]"
         filter_parts.append(f"[0:v]{obj_label}overlay={x_expr}:{y_expr}{out_label}")
@@ -508,14 +539,11 @@ class Project:
         inputs = []
         filter_parts = []
 
-        # [0] 背景色
         inputs.extend([
             "-f", "lavfi",
             "-i", f"color=c={self.background_color}:s={self.width}x{self.height}:d={self.duration}:r={self.fps}",
         ])
 
-        # タイミングは_resolve_anchorsで計算済み
-        # z-order: priorityでソート（Pause/_AnchorMarkerを除外）
         renderable = [o for o in self.objects if isinstance(o, Object)]
         sorted_objects = sorted(renderable, key=lambda o: o.priority)
 
@@ -524,43 +552,17 @@ class Project:
         for i, obj in enumerate(sorted_objects):
             input_idx = i + 1
 
-            # media_typeで入力分岐
             if obj.media_type == "image":
                 inputs.extend(["-loop", "1", "-i", obj.source])
             else:
                 inputs.extend(["-i", obj.source])
 
-            # オブジェクトごとのフィルタチェーン構築
-            obj_filters = []
-
-            # Transform処理
-            for t in obj.transforms:
-                if t.name == "resize":
-                    sx = t.params.get("sx", 1)
-                    sy = t.params.get("sy", 1)
-                    obj_filters.append(f"scale=iw*{sx}:ih*{sy}")
-
-            # Effect処理（move以外）
             dur = obj.duration or 5
             start = obj.start_time
-            for e in obj.effects:
-                if e.name == "scale":
-                    scale_expr = e.params.get("value", Const(1))
-                    u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
-                    ffmpeg_str = scale_expr.to_ffmpeg(u_expr)
-                    obj_filters.append(
-                        f"scale=w='trunc(iw*({ffmpeg_str})/2)*2':h='trunc(ih*({ffmpeg_str})/2)*2':eval=frame"
-                    )
-                elif e.name == "fade":
-                    alpha_expr = e.params.get("alpha", Const(1.0))
-                    u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
-                    ffmpeg_str = alpha_expr.to_ffmpeg(u_expr)
-                    obj_filters.append("format=rgba")
-                    obj_filters.append(
-                        f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
-                    )
 
-            # フィルタがあればラベル付きで追加
+            obj_filters = _build_transform_filters(obj)
+            obj_filters.extend(_build_effect_filters(obj, start, dur))
+
             obj_label = f"[obj{input_idx}]"
             if obj_filters:
                 filter_parts.append(
@@ -569,13 +571,10 @@ class Project:
             else:
                 obj_label = f"[{input_idx}:v]"
 
-            # overlay位置（moveから取得）
             x_expr, y_expr = _build_move_exprs(obj, start, dur)
 
-            # 時間制御: enable='between(t,start,end)'
             enable_str = ""
             if obj.duration is not None:
-                start = obj.start_time
                 end = start + obj.duration
                 enable_str = f":enable='between(t\\,{start}\\,{end})'"
 
@@ -602,21 +601,54 @@ class Project:
         return cmd
 
 
+# --- フィルタ生成ヘルパー ---
+
+def _build_transform_filters(obj):
+    """Transform処理のフィルタリストを生成"""
+    filters = []
+    for t in obj.transforms:
+        if t.name == "resize":
+            sx = t.params.get("sx", 1)
+            sy = t.params.get("sy", 1)
+            filters.append(f"scale=iw*{sx}:ih*{sy}")
+    return filters
+
+
+def _build_effect_filters(obj, start, dur):
+    """scale/fade等のeffectフィルタリストを生成（move以外）"""
+    filters = []
+    for e in obj.effects:
+        if e.name == "scale":
+            scale_expr = e.params.get("value", Const(1))
+            u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+            ffmpeg_str = scale_expr.to_ffmpeg(u_expr)
+            filters.append(
+                f"scale=w='trunc(iw*({ffmpeg_str})/2)*2':h='trunc(ih*({ffmpeg_str})/2)*2':eval=frame"
+            )
+        elif e.name == "fade":
+            alpha_expr = e.params.get("alpha", Const(1.0))
+            u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
+            ffmpeg_str = alpha_expr.to_ffmpeg(u_expr)
+            filters.append("format=rgba")
+            filters.append(
+                f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
+            )
+    return filters
+
+
 def _build_move_exprs(obj, start, dur):
     """objのeffectsからmoveを探し、overlay用のx_expr/y_exprを返す"""
-    # 最後のmoveを優先
     move_effect = None
     for e in obj.effects:
         if e.name == "move":
             move_effect = e
 
     if move_effect is None:
-        return "(W-w)/2", "(H-h)/2"  # デフォルト中心
+        return "(W-w)/2", "(H-h)/2"
 
     p = move_effect.params
     anchor_val = p.get("anchor", "center")
 
-    # x, y は Expr（_resolve_param済み）
     x_param = p.get("x", Const(0.5))
     y_param = p.get("y", Const(0.5))
 
@@ -718,8 +750,6 @@ class Pause:
         self.start_time = 0
         self.priority = 0
         self._until_anchor = None
-        if Project._current is not None:
-            Project._current.objects.append(self)
 
     def time(self, duration):
         self.duration = duration
@@ -768,17 +798,9 @@ class Object:
             raise TypeError(f"Object <= に渡せるのは Transform/TransformChain/Effect/EffectChain のみ: {type(rhs)}")
         return self
 
-    def cache(self, path, *, overwrite=True, bg=None, fps=None):
-        """単体レンダしてキャッシュファイルを生成、そのファイルを sourceに持つ新Objectを返す"""
+    def _make_cached_object(self, path):
+        """キャッシュObject（transforms/effectsなし）を生成してProjectに登録"""
         proj = Project._current
-        if proj is None:
-            raise RuntimeError("cache()にはアクティブなProjectが必要です")
-        if proj._mode == "plan":
-            return self  # Planモード: no-op（タイミング計算用にselfを返す）
-        if overwrite or not os.path.exists(path):
-            proj.render_object(self, path, bg=bg, fps=fps)
-        # キャッシュObjectを生成（Projectに自動登録される）
-        # 元のObjectをProjectから除去し、キャッシュObjectで置き換える
         cached = Object.__new__(Object)
         cached.source = path
         cached.transforms = []
@@ -788,11 +810,22 @@ class Object:
         cached.priority = self.priority
         cached.media_type = _detect_media_type(path)
         cached._until_anchor = self._until_anchor
-        # Projectのobjectsリストで自分をcachedに置換
         if proj is not None and self in proj.objects:
             idx = proj.objects.index(self)
             proj.objects[idx] = cached
         return cached
+
+    def cache(self, path, *, overwrite=True, bg=None, fps=None):
+        """単体レンダしてキャッシュファイルを生成、そのファイルを sourceに持つ新Objectを返す"""
+        proj = Project._current
+        if proj is None:
+            raise RuntimeError("cache()にはアクティブなProjectが必要です")
+        if proj._mode == "plan":
+            # Planモード: renderと同形式のオブジェクトを返す（ファイル生成なし）
+            return self._make_cached_object(path)
+        if overwrite or not os.path.exists(path):
+            proj.render_object(self, path, bg=bg, fps=fps)
+        return self._make_cached_object(path)
 
     @classmethod
     def load_cache(cls, path):
@@ -861,15 +894,19 @@ def anchor(name):
 
 
 class _PauseFactory:
-    """pause.time(N) / pause.until(name) でPauseを生成するファクトリ"""
+    """pause.time(N) / pause.until(name) でPauseを生成・登録するファクトリ"""
     def time(self, duration):
         p = Pause()
         p.duration = duration
+        if Project._current is not None:
+            Project._current.objects.append(p)
         return p
 
     def until(self, name):
         p = Pause()
         p._until_anchor = name
+        if Project._current is not None:
+            Project._current.objects.append(p)
         return p
 
 

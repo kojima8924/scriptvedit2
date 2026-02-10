@@ -10,7 +10,7 @@
 
 ■ ファイル構成
   scriptvedit2/
-  ├── scriptvedit.py   ← コアライブラリ (819行)
+  ├── scriptvedit.py   ← コアライブラリ (876行)
   ├── main.py          ← オーケストレータ (デモ用)
   ├── bg.py            ← 背景レイヤー (デモ用)
   ├── onigiri.py       ← おにぎりレイヤー (デモ用)
@@ -26,9 +26,48 @@
   72a91bf 画像キャッシュの透過対応と1ファイル1レイヤーテスト10件追加
   d44a0b3 anchor/pause/until機能と2パスアーキテクチャを追加
   3fc1416 Expr式ビルダー導入: Effect引数をfloat/lambda(u)/Expr統一（破壊的変更）
+  6b09de3 layer()遅延化と2パスplan/render分離: アンカー解決の堅牢化
 
 ============================================================
-■ 【最新】 Expr式ビルダー (3fc1416)
+■ 【最新】 layer()遅延化と2パスplan/render分離 (6b09de3)
+============================================================
+
+  ★ render()がplan pass→render passの2段階になった。
+
+  ◆ 変更内容
+    1. layer() は登録のみ（遅延実行）
+       - 旧: layer()呼び出し時にexec()でレイヤーファイルを即実行
+       - 新: (filename, priority) を _layer_files に記録するだけ
+       - 実際の実行は render() 内で _exec_layer() 経由
+
+    2. render() が2パス構成に
+       - Plan pass: _plan_resolve() → アンカーの固定点反復解決
+         - cache() は no-op（selfを返す。タイミング計算のみ）
+         - _resolve_anchors(check_unresolved=False) で反復解決
+         - アンカー値が収束するまで繰り返し（最大 len(files)+2 回）
+       - Render pass: 本実行
+         - anchors確定済みの状態でレイヤーを再実行
+         - cache() は通常動作（ファイル出力）
+         - _resolve_anchors(check_unresolved=True) で最終確認
+
+    3. anchor() に同名重複チェック追加
+       - _anchor_defined_in で定義元ファイルを記録
+       - 同一ファイル内の再定義はOK（plan反復で発生するため）
+       - 異なるファイルからの同名定義は RuntimeError
+
+    4. 未定義アンカーの診断改善
+       - 参照先と定義済みアンカー一覧を表示
+
+  ◆ 内部メソッド
+    _plan_resolve()     ... 固定点反復でアンカー解決（plan pass本体）
+    _exec_layer(f, p)   ... レイヤーファイルfをexec実行
+    _mode               ... "plan" or "render"（cache動作を制御）
+    _layer_files         ... [(filename, priority)] の登録リスト
+    _anchor_defined_in  ... {name: filename} の診断情報
+    _current_layer_file ... 実行中のファイル名
+
+============================================================
+■ Expr式ビルダー (3fc1416)
 ============================================================
 
   ★破壊的変更: Effect引数のセマンティクスが変わった。
@@ -128,6 +167,7 @@
     cached = obj.cache("cache.png")         ... 透過PNG出力 (背景なし)
     cached = obj.cache("cache.mp4")         ... 動画出力 (背景あり)
     cached.time(5) <= move(...) & scale(...)
+    ※ planモードではno-op（selfを返す）
 
 ============================================================
 ■ anchor/pause/until 機能
@@ -135,6 +175,7 @@
 
   ◆ anchor(name)
     レイヤー内の現在の累積時刻を名前付きアンカーとして登録。
+    異なるファイルからの同名定義は禁止（RuntimeError）。
 
   ◆ pause.time(N) / pause.until(name)
     非描画タイムラインアイテム。時間占有のみ。
@@ -142,11 +183,15 @@
   ◆ obj.until(name)
     durationをアンカー時刻まで伸長。
 
-  ◆ 2パスアーキテクチャ
-    render() → _resolve_anchors() [plan pass] → _build_ffmpeg_cmd() [render pass]
+  ◆ 2パスアーキテクチャ（6b09de3で改善）
+    render()
+      → _plan_resolve() [plan pass: 固定点反復でアンカー解決]
+      → _exec_layer() × N [render pass: anchors確定済みで本実行]
+      → _resolve_anchors() [最終アンカー解決]
+      → _build_ffmpeg_cmd() [ffmpegコマンド構築]
 
 ============================================================
-■ クラス構成 (scriptvedit.py 819行)
+■ クラス構成 (scriptvedit.py 876行)
 ============================================================
 
   Expr系 (L8-131):
@@ -156,18 +201,19 @@
   sin, cos, tan, ... lerp, clip, smoothstep, ... abs, min, max, round, pow
   PI, E
 
-  Project (L266-555):
-  layer(), render(), render_object(), _build_ffmpeg_cmd(),
+  Project (L266-612):
+  layer(), _exec_layer(), render(), _plan_resolve(),
+  render_object(), _build_ffmpeg_cmd(),
   _build_video_cache_cmd(), _build_image_cache_cmd(), _resolve_anchors()
 
-  _build_move_exprs() (L558-587)
-  TransformChain, EffectChain, Transform, Effect (L590-655)
-  _AnchorMarker, Pause, Object (L658-754)
+  _build_move_exprs() (L615-644)
+  TransformChain, EffectChain, Transform, Effect (L647-712)
+  _AnchorMarker, Pause, Object (L715-811)
 
-  ファクトリ関数 (L757-791):
+  ファクトリ関数 (L814-848):
   resize(), scale(), fade(), move()
 
-  アンカー/同期 (L794-818):
+  アンカー/同期 (L851-876):
   anchor(), _PauseFactory, pause
 
 ============================================================
@@ -189,6 +235,7 @@
 
   ※ test01〜11は lambda形式に移行済み（旧アニメーション動作を再現）
   ※ test12はExpr新機能のデモ
+  ※ 全テスト test01〜12 + メインデモ 2パス構成で動作確認済み
 
 ============================================================
 ■ 既知の制約・注意点
@@ -198,15 +245,16 @@
      (ffmpegの浮動小数点精度の問題)
 
   2. cache() + until() の組み合わせ:
-     cache() は exec 時（render前）に実行されるため、until で duration が
-     未確定の場合、動画キャッシュの長さは fallback の 5秒になる。
-     画像キャッシュ (.png) なら問題なし。
+     planモードではcache()はno-opになるためタイミング計算は正常動作。
+     ただしuntilで動的に決まるdurationの動画キャッシュは、
+     render pass時点でアンカー確定済みなので正しく生成される。
 
   3. 同一レイヤー内のオブジェクトは順次タイムライン（直列配置）
      並列配置（同時表示）するには別レイヤーファイルにする
 
   4. anchor 循環参照の検出は未実装
      （反復回数上限で無限ループは防止しているが、明示的エラーは出ない）
+     ※ 異なるファイルからの同名anchor定義はRuntimeErrorで検出
 
   5. Windows環境 (Python 3.10, ffmpeg 8.0) でのみテスト済み
 

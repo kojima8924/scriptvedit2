@@ -1,0 +1,168 @@
+# スナップショットテスト: dry_runで生成したffmpegコマンドをスナップショットと比較
+import sys, os, json
+sys.path.insert(0, "..")
+from scriptvedit import *
+
+SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "snapshots")
+
+
+def normalize_cmd(cmd):
+    """コマンドリストをOS非依存に正規化"""
+    return [c.replace("\\", "/") for c in cmd]
+
+
+def load_snapshot(name):
+    path = os.path.join(SNAPSHOT_DIR, f"{name}.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_snapshot(name, cmd):
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    path = os.path.join(SNAPSHOT_DIR, f"{name}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cmd, f, indent=2, ensure_ascii=False)
+
+
+def run_test(name, setup_fn, update=False):
+    """スナップショットテストを実行。update=Trueならスナップショットを更新"""
+    cmd = normalize_cmd(setup_fn())
+    expected = load_snapshot(name)
+    if expected is None or update:
+        save_snapshot(name, cmd)
+        print(f"  {name}: スナップショット{'更新' if expected else '作成'}")
+        return True
+    if cmd != expected:
+        print(f"  {name}: 不一致!")
+        for i, (a, b) in enumerate(zip(cmd, expected)):
+            if a != b:
+                print(f"    [{i}] 期待: {b}")
+                print(f"    [{i}] 実際: {a}")
+        if len(cmd) != len(expected):
+            print(f"    長さ: 期待={len(expected)}, 実際={len(cmd)}")
+        return False
+    print(f"  {name}: OK")
+    return True
+
+
+# --- テスト定義 ---
+
+def setup_test01():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="darkred")
+    p.layer("test01_bg.py", priority=0)
+    p.layer("test01_oni.py", priority=1)
+    return p.render("test01.mp4", dry_run=True)
+
+def setup_test02():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test02_maku.py", priority=0)
+    p.layer("test02_cafe.py", priority=1)
+    return p.render("test02.mp4", dry_run=True)
+
+def setup_test03():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test03_bg.py", priority=0)
+    p.layer("test03_oni.py", priority=1)
+    p.layer("test03_virus.py", priority=2)
+    return p.render("test03.mp4", dry_run=True)
+
+def setup_test04():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="white")
+    p.layer("test04_maku.py", priority=0)
+    p.layer("test04_cache_layer.py", priority=1)
+    return p.render("test04.mp4", dry_run=True)
+
+def setup_test05():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="green")
+    p.layer("test05_bg.py", priority=0)
+    p.layer("test05_pop.py", priority=1)
+    return p.render("test05.mp4", dry_run=True)
+
+def setup_test06():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="olive")
+    p.layer("test06_oni.py", priority=0)
+    return p.render("test06.mp4", dry_run=True)
+
+def setup_test07():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="navy")
+    p.layer("test07_oni.py", priority=0)
+    p.layer("test07_cafe.py", priority=1)
+    p.layer("test07_virus.py", priority=2)
+    return p.render("test07.mp4", dry_run=True)
+
+def setup_test08():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="darkgreen")
+    p.layer("test08_bg.py", priority=0)
+    p.layer("test08_pop.py", priority=1)
+    return p.render("test08.mp4", dry_run=True)
+
+def setup_test09():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="gray")
+    p.layer("test09_oni.py", priority=0)
+    p.layer("test09_cafe.py", priority=1)
+    p.layer("test09_virus.py", priority=2)
+    p.layer("test09_pop.py", priority=3)
+    return p.render("test09.mp4", dry_run=True)
+
+def setup_test10():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="purple")
+    p.layer("test10_maku.py", priority=0)
+    p.layer("test10_cache_layer.py", priority=1)
+    return p.render("test10.mp4", dry_run=True)
+
+def setup_test11():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="darkblue")
+    p.layer("test11_maku.py", priority=0)
+    p.layer("test11_oni.py", priority=1)
+    return p.render("test11.mp4", dry_run=True)
+
+def setup_test12():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="darkslategray")
+    p.layer("test12_sin_fade.py", priority=0)
+    p.layer("test12_lambda_scale.py", priority=1)
+    p.layer("test12_lambda_move.py", priority=2)
+    return p.render("test12.mp4", dry_run=True)
+
+
+ALL_TESTS = [
+    ("test01", setup_test01),
+    ("test02", setup_test02),
+    ("test03", setup_test03),
+    ("test04", setup_test04),
+    ("test05", setup_test05),
+    ("test06", setup_test06),
+    ("test07", setup_test07),
+    ("test08", setup_test08),
+    ("test09", setup_test09),
+    ("test10", setup_test10),
+    ("test11", setup_test11),
+    ("test12", setup_test12),
+]
+
+
+if __name__ == "__main__":
+    update = "--update" in sys.argv
+    print("スナップショットテスト" + (" (更新モード)" if update else ""))
+    passed = 0
+    failed = 0
+    for name, fn in ALL_TESTS:
+        if run_test(name, fn, update=update):
+            passed += 1
+        else:
+            failed += 1
+    print(f"\n結果: {passed} passed, {failed} failed")
+    sys.exit(1 if failed else 0)

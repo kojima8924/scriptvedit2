@@ -1,0 +1,23 @@
+[
+  "ffmpeg",
+  "-y",
+  "-f",
+  "lavfi",
+  "-i",
+  "color=c=olive:s=1280x720:d=3:r=30",
+  "-loop",
+  "1",
+  "-i",
+  "../onigiri_tenmusu.png",
+  "-filter_complex",
+  "[1:v]scale=iw*0.4:ih*0.4,scale=w='trunc(iw*((3.0+((1-3.0)*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((3.0+((1-3.0)*clip((t-0)/3/,0/,1))))/2)*2':eval=frame[obj1];[0:v][obj1]overlay=0.5*W-w/2:0.5*H-h/2:enable='between(t/,0/,3)'[v1]",
+  "-map",
+  "[v1]",
+  "-c:v",
+  "libx264",
+  "-t",
+  "3",
+  "-pix_fmt",
+  "yuv420p",
+  "test06.mp4"
+]
