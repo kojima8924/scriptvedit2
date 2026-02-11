@@ -251,6 +251,22 @@ def setup_test22():
     return p.render("test22.mp4", dry_run=True)
 
 
+def setup_test23():
+    """move保存テスト: resize(force) + move + scaleでmoveが消えないことを確認"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test23_move_preserve.py", priority=0)
+    return p.render("test23.mp4", dry_run=True)
+
+
+def setup_test24():
+    """video checkpointテスト: 動画のtransform-only → .webm拡張子"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test24_video_checkpoint.py", priority=0)
+    return p.render("test24.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -274,6 +290,8 @@ ALL_TESTS = [
     ("test20", setup_test20),
     ("test21", setup_test21),
     ("test22", setup_test22),
+    ("test23", setup_test23),
+    ("test24", setup_test24),
 ]
 
 

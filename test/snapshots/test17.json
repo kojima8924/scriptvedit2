@@ -7,11 +7,11 @@
     "-i",
     "color=c=darkgreen:s=1280x720:d=4:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/07fb9cc9/f6f3133c68597a29.webm",
+    "__cache__/artifacts/checkpoint/07fb9cc9/0d4894e1ab7803ee.webm",
     "-i",
     "../Impact-38.mp3",
     "-filter_complex",
-    "[0:v][1:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,3)'[v1];[1:a]atrim=duration=3,asetpts=PTS-STARTPTS[a0];[2:a]atrim=duration=4,asetpts=PTS-STARTPTS,volume=volume='0.6':eval=frame,volume=volume='(0+((1-0)*clip((t)/4/,0/,1)))':eval=frame[a1];[a0][a1]amix=inputs=2:normalize=0[aout]",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1];[1:a]atrim=duration=3,asetpts=PTS-STARTPTS[a0];[2:a]atrim=duration=4,asetpts=PTS-STARTPTS,volume=volume='0.6':eval=frame,volume=volume='(0+((1-0)*clip((t)/4/,0/,1)))':eval=frame[a1];[a0][a1]amix=inputs=2:normalize=0[aout]",
     "-map",
     "[v1]",
     "-map",
@@ -27,7 +27,7 @@
     "test17.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/07fb9cc9/f6f3133c68597a29.webm": [
+    "__cache__/artifacts/checkpoint/07fb9cc9/0d4894e1ab7803ee.webm": [
       "ffmpeg",
       "-y",
       "-i",
@@ -46,7 +46,7 @@
       "0",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/07fb9cc9/f6f3133c68597a29.webm"
+      "__cache__/artifacts/checkpoint/07fb9cc9/0d4894e1ab7803ee.webm"
     ]
   }
 }

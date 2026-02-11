@@ -7,17 +7,17 @@
     "-i",
     "color=c=black:s=1280x720:d=8:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/e1cffaed/5bb3591d1fff239c.webm",
+    "__cache__/artifacts/checkpoint/e1cffaed/5c1f9785a9a49ea9.webm",
     "-i",
-    "__cache__/artifacts/checkpoint/fb1ebc85/9de6a3a0856071d7.webm",
+    "__cache__/artifacts/checkpoint/fb1ebc85/de568b3fddb430aa.webm",
     "-i",
-    "__cache__/artifacts/web/subtitle_5e0fc17f/14294d6c55edbeff.webm",
+    "__cache__/artifacts/web/subtitle_5e0fc17f/00985d08ed0c6ada.webm",
     "-i",
-    "__cache__/artifacts/web/subtitle_22b370f4/d9c6d89be096e45a.webm",
+    "__cache__/artifacts/web/subtitle_22b370f4/26b55dd4e3dfb13b.webm",
     "-i",
-    "__cache__/artifacts/checkpoint/4c68636e/df7885baf50888c4.webm",
+    "__cache__/artifacts/checkpoint/4c68636e/a6e11b13cb462b91.webm",
     "-filter_complex",
-    "[0:v][1:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,8)'[v1];[v1][2:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,2.5)'[v2];[v2][3:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,2.5/,4.5)'[v3];[v3][4:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,4.5/,7.0)'[v4];[v4][5:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,1.0)'[v5]",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,8)'[v1];[v1][2:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,2.5)'[v2];[v2][3:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,2.5/,4.5)'[v3];[v3][4:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,4.5/,7.0)'[v4];[v4][5:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,1.0)'[v5]",
     "-map",
     "[v5]",
     "-c:v",
@@ -30,7 +30,7 @@
     "test20.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/web/subtitle_b10b1471/50939a383fb015c7.webm": [
+    "__cache__/artifacts/web/subtitle_b10b1471/f55d7f6263ebb6af.webm": [
       "ffmpeg",
       "-y",
       "-framerate",
@@ -49,9 +49,9 @@
       "0",
       "-t",
       "2.5",
-      "__cache__/artifacts/web/subtitle_b10b1471/50939a383fb015c7.webm"
+      "__cache__/artifacts/web/subtitle_b10b1471/f55d7f6263ebb6af.webm"
     ],
-    "__cache__/artifacts/web/subtitle_5e0fc17f/14294d6c55edbeff.webm": [
+    "__cache__/artifacts/web/subtitle_5e0fc17f/00985d08ed0c6ada.webm": [
       "ffmpeg",
       "-y",
       "-framerate",
@@ -70,9 +70,9 @@
       "0",
       "-t",
       "2.0",
-      "__cache__/artifacts/web/subtitle_5e0fc17f/14294d6c55edbeff.webm"
+      "__cache__/artifacts/web/subtitle_5e0fc17f/00985d08ed0c6ada.webm"
     ],
-    "__cache__/artifacts/web/subtitle_22b370f4/d9c6d89be096e45a.webm": [
+    "__cache__/artifacts/web/subtitle_22b370f4/26b55dd4e3dfb13b.webm": [
       "ffmpeg",
       "-y",
       "-framerate",
@@ -91,9 +91,9 @@
       "0",
       "-t",
       "2.5",
-      "__cache__/artifacts/web/subtitle_22b370f4/d9c6d89be096e45a.webm"
+      "__cache__/artifacts/web/subtitle_22b370f4/26b55dd4e3dfb13b.webm"
     ],
-    "__cache__/artifacts/web/bubble_2042e1cb/3715cacd9293d2d4.webm": [
+    "__cache__/artifacts/web/bubble_2042e1cb/b56c7393fe794059.webm": [
       "ffmpeg",
       "-y",
       "-framerate",
@@ -112,9 +112,9 @@
       "0",
       "-t",
       "1.0",
-      "__cache__/artifacts/web/bubble_2042e1cb/3715cacd9293d2d4.webm"
+      "__cache__/artifacts/web/bubble_2042e1cb/b56c7393fe794059.webm"
     ],
-    "__cache__/artifacts/checkpoint/e1cffaed/5bb3591d1fff239c.webm": [
+    "__cache__/artifacts/checkpoint/e1cffaed/5c1f9785a9a49ea9.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -137,9 +137,9 @@
       "0",
       "-t",
       "8",
-      "__cache__/artifacts/checkpoint/e1cffaed/5bb3591d1fff239c.webm"
+      "__cache__/artifacts/checkpoint/e1cffaed/5c1f9785a9a49ea9.webm"
     ],
-    "__cache__/artifacts/checkpoint/fb1ebc85/9de6a3a0856071d7.webm": [
+    "__cache__/artifacts/checkpoint/fb1ebc85/de568b3fddb430aa.webm": [
       "ffmpeg",
       "-y",
       "-i",
@@ -158,9 +158,9 @@
       "0",
       "-t",
       "2.5",
-      "__cache__/artifacts/checkpoint/fb1ebc85/9de6a3a0856071d7.webm"
+      "__cache__/artifacts/checkpoint/fb1ebc85/de568b3fddb430aa.webm"
     ],
-    "__cache__/artifacts/checkpoint/4c68636e/df7885baf50888c4.webm": [
+    "__cache__/artifacts/checkpoint/4c68636e/a6e11b13cb462b91.webm": [
       "ffmpeg",
       "-y",
       "-i",
@@ -179,7 +179,7 @@
       "0",
       "-t",
       "1.0",
-      "__cache__/artifacts/checkpoint/4c68636e/df7885baf50888c4.webm"
+      "__cache__/artifacts/checkpoint/4c68636e/a6e11b13cb462b91.webm"
     ]
   }
 }

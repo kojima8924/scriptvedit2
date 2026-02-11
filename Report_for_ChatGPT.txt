@@ -1,7 +1,7 @@
 ============================================================
   scriptvedit2 プロジェクト状況レポート (Claude Code → ChatGPT)
   作成日: 2026-02-11
-  最終コミット: f38d42c
+  最終更新: 2026-02-11
 ============================================================
 
 ============================================================
@@ -12,13 +12,13 @@
   「1ファイル = 1レイヤー」アーキテクチャを採用。
   main.py がオーケストレータ、各レイヤーは独立した .py ファイル。
 
-  コアファイル: scriptvedit.py (約2260行)
+  コアファイル: scriptvedit.py (約2280行)
   ライセンス: なし（個人プロジェクト）
   環境: Windows 11 / Python 3.10 / ffmpeg 8.0-full_build
 
   ◆ ファイル構成
     scriptvedit2/
-    ├── scriptvedit.py   ← コアライブラリ (約2260行)
+    ├── scriptvedit.py   ← コアライブラリ (約2280行)
     ├── main.py          ← オーケストレータ (デモ用)
     ├── bg.py            ← 背景レイヤー (デモ用)
     ├── onigiri.py       ← おにぎりレイヤー (デモ用)
@@ -29,11 +29,11 @@
     │   ├── bubble.html        ← 吹き出しテンプレート
     │   └── diagram_svg.html   ← SVG図解テンプレート
     ├── test/
-    │   ├── test_snapshot.py   ← スナップショットテスト (22テスト)
-    │   ├── test_errors.py     ← エラーケーステスト (22テスト)
+    │   ├── test_snapshot.py   ← スナップショットテスト (24テスト)
+    │   ├── test_errors.py     ← エラーケーステスト (29テスト)
     │   ├── render_all.py      ← 全テスト動画の実レンダリング
-    │   ├── snapshots/         ← スナップショットJSON (test01〜test22)
-    │   ├── test01〜test22_main.py + レイヤーファイル群
+    │   ├── snapshots/         ← スナップショットJSON (test01〜test24)
+    │   ├── test01〜test24_main.py + レイヤーファイル群
     │   ├── test19_scene.html  ← web Objectテスト用HTML
     │   └── *.png, *.jpg       ← テスト用素材
     ├── *.png, *.jpg     ← 素材画像 (変更禁止)
@@ -56,7 +56,7 @@
     d2ae888 web Object機能追加: HTMLテンプレート→透明webm(VP9 alpha)→合成パイプライン
     8132e4b テンプレート機能(subtitle/bubble/diagram) + scaleアニメーション振動修正
     f38d42c チェックポイントキャッシュ記法を追加
-    xxxxxxx キャッシュ再設計: policy/quality方式 + signatureベース ← 最新（未コミット）
+    8a6630e キャッシュ再設計: policy/quality方式 + signatureベース ← 最新
 
 ============================================================
 2. 主要クラスとAPI（全クラス・全ファクトリ関数の一覧と説明）
@@ -119,9 +119,9 @@
       pause.until(name)        ... アンカーまで待機（Pauseを生成・登録）
 
   ◆ テンプレートラッパー関数
-    subtitle(text, who, duration, style, size, name, debug_frames)
-    bubble(text, duration, anchor, pos, box, style, size, name, debug_frames)
-    diagram(objects, duration, style, size, name, debug_frames)
+    subtitle(text, who, duration, style, size, name, debug_frames, deps)
+    bubble(text, duration, anchor, pos, box, style, size, name, debug_frames, deps)
+    diagram(objects, duration, style, size, name, debug_frames, deps)
 
   ◆ 図形ビルダー関数
     circle(x, y, r, **kw)     ... 円オブジェクト定義（diagram用）
@@ -145,16 +145,13 @@
   ◆ Objectの主要メソッド
     obj.time(duration)     ... 表示時間を設定し、selfを返す
     obj.until(name)        ... durationをアンカー時刻まで伸長し、selfを返す
-    obj.cache(path)        ... 単体レンダしてキャッシュファイル生成、新Objectを返す
     obj.length()           ... 加工後の再生時間を返す（ffprobe + trim/atrim/atempo反映）
     obj.split()            ... (VideoView or None, AudioView or None) を返す
-    Object.load_cache(path) ... キャッシュファイルからObjectを生成（クラスメソッド）
 
   ◆ Projectの主要メソッド
     p.configure(**kwargs)  ... width, height, fps, duration, background_color を設定
     p.layer(filename, priority, cache) ... レイヤーファイルを登録
     p.render(output_path, dry_run=False) ... レンダリング実行（dry_run=Trueでコマンドのみ返却）
-    p.render_object(obj, output_path)    ... 単体Objectをレンダリング
 
   ◆ Exprの数値評価メソッド
     expr.eval_at(u_value)  ... Expr式をPythonで数値評価（u=u_valueとして計算）
@@ -246,11 +243,6 @@
     p.layer("maku.py", cache="auto")   ... 存在時利用/なければ通常
     p.layer("maku.py", cache="off")    ... 従来通り（デフォルト）
 
-  ◆ 単体キャッシュ (Object.cache) 【非推奨】
-    cached = obj.cache("cache.png")    ... 透過PNG出力（DeprecationWarning）
-    cached = obj.cache("cache.mp4")    ... 動画出力（DeprecationWarning）
-    → policy/qualityベースのチェックポイントを使用すべき
-
 ============================================================
 4. チェックポイントキャッシュ 【全面再設計: policy/quality方式】
 ============================================================
@@ -288,6 +280,11 @@
     RAA: bakeable ops中の最右 policy="auto"（最後のFSP以降にforceがなければ）
     policy="off" は候補から除外
 
+  ◆ bakeable/live分離 (_split_ops)
+    checkpoint処理はbakeable opsのみで実行。
+    live ops (move/delete) はcheckpoint後にeffectsに戻される。
+    これによりmove/deleteがcheckpoint後に消失するバグを修正。
+
   ◆ 活性化条件
     bakeable ops が1つ以上ある全Object（無印=autoのみでもRAA保存）
     全opがpolicy="off"のObjectはスキップ
@@ -295,6 +292,7 @@
   ◆ キャッシュ保存先 【パス変更】
     __cache__/artifacts/checkpoint/{src_hash[:8]}/{signature[:16]}.{ext}
     signature = FFP(source) + OPFP + quality + engine_ver + dur? + fps?
+    FFP = _file_fingerprint(source) = (abs_path, size, mtime_ns)
     画像→.png、動画→.webm (video入力 + transform-only でもwebm)
 
   ◆ 復元ロジック (_find_resume_point)
@@ -337,7 +335,8 @@
   処理フロー:
     scene.html + data → Playwright(renderFrame) → PNGシーケンス
     → ffmpeg → __cache__/artifacts/web/{name}/{signature}.webm → Object(video)として合成
-    signatureベースでキャッシュ判定（テンプレートFFP + data_hash + dur + fps + size + engine_ver）
+    signatureベースでキャッシュ判定（テンプレートFFP + data_hash + deps_hash + dur + fps + size + engine_ver）
+    deps引数: テンプレートが参照する外部ファイルのリスト。変更検知でキャッシュ無効化。
 
 ============================================================
 7. 音声機能（AudioEffect、amix、adelay、split、delete/adelete）
@@ -394,81 +393,65 @@
 10. テスト一覧
 ============================================================
 
-  ◆ スナップショットテスト (test_snapshot.py) - 22テスト
-    test01〜test21: 全スナップショット再生成済み（RAA保存でdict形式に変更）
-    test22: チェックポイントキャッシュテスト（+resize → forceポリシー）
+  ◆ スナップショットテスト (test_snapshot.py) - 24テスト
+    test01〜test22: 全スナップショット再生成済み（bakeable-only fingerprint + ENGINE_VER=2）
+    test23: move保存テスト（resize(force) + move + scaleでmoveが消えないことを確認）
+    test24: video checkpointテスト（動画のtransform-only → .webm拡張子）
 
-  ◆ エラーケーステスト (test_errors.py) - 26テスト
+  ◆ エラーケーステスト (test_errors.py) - 29テスト
     1〜19: 既存テスト
-    20. -Transform                → policy="off" 確認（旧TypeError→変更）
-    21. -Effect                   → policy="off" 確認（旧TypeError→変更）
-    22. ~chain糖衣                → 全opがquality="fast" 確認（旧_CheckpointTransform→変更）
-    23. +force演算子              → policy="force" 確認           【NEW】
-    24. -off演算子                → policy="off" 確認             【NEW】
-    25. ~fast品質                 → quality="fast" 確認           【NEW】
-    26. +chain force              → 末尾policy="force" 確認       【NEW】
+    20. -Transform                → policy="off" 確認
+    21. -Effect                   → policy="off" 確認
+    22. ~chain糖衣                → 全opがquality="fast" 確認
+    23. +force演算子              → policy="force" 確認
+    24. -off演算子                → policy="off" 確認
+    25. ~fast品質                 → quality="fast" 確認
+    26. +chain force              → 末尾policy="force" 確認
+    27. FFP変化検出               → ファイル変更でfingerprintが変わることを確認  【NEW】
+    28. checkpoint FFP署名         → ファイル変更でキャッシュパスが変化            【NEW】
+    29. web deps引数              → deps=["a.png","b.png"]が渡せることを確認      【NEW】
 
-  ※ 全テスト test01〜22 + スナップショット22件 + エラーケース26件 全PASS確認済み
+  ※ 全テスト test01〜24 + スナップショット24件 + エラーケース29件 全PASS確認済み
 
 ============================================================
-11. 最新変更の内容（キャッシュ再設計）
+11. 最新変更の内容（チェックポイント致命点修正）
 ============================================================
 
-  ◆ 破壊的変更: 演算子意味の全面変更
-    旧: ~op=autoチェックポイント, +op=makeチェックポイント, -op=TypeError
-    新: ~op=quality:fast, +op=policy:force, -op=policy:off, 無印=auto+final
-    _CheckpointTransform/_CheckpointEffectクラスは廃止
+  ◆ 致命的バグ修正1: move/deleteがcheckpoint後に消える問題
+    - _split_ops()関数を追加: ops列をbakeable/liveに分離
+    - _process_checkpoints(): bakeable_opsのみで処理、live_opsを最後に復元
+    - _collect_checkpoint_cmds(): 同じパターンでbakeable/live分離
+    - _ensure_checkpoints(): bakeable_opsのみで判定
 
-  ◆ Transform/Effect にpolicy/quality属性追加
-    - __init__(name, *, policy="auto", quality="final", **params)
-    - _copy(**overrides)メソッドで属性コピー付き新インスタンス生成
-    - __invert__ (~): quality="fast"
-    - __pos__ (+): policy="force"
-    - __neg__ (-): policy="off"
+  ◆ 致命的バグ修正2: signatureにFFPが入っていない問題
+    - _checkpoint_cache_path(): original_sourceのFFP(mtime/size)を含めるよう変更
+    - ファイル差し替え時に古いキャッシュが誤用されなくなった
+    - dry_runでファイルが存在しない場合はパスベースにfallback
+    - _ENGINE_VER: "1" → "2" に更新（旧キャッシュ全無効化）
 
-  ◆ TransformChain/EffectChain の演算子変更
-    - ~chain: 全opにquality="fast"付与（旧: 末尾のみ）
-    - +chain: 末尾opにpolicy="force"
-    - -chain: 末尾opにpolicy="off"（新規）
+  ◆ Object.cache() / load_cache() / render_object() 廃止
+    - 自動チェックポイント(+resize等)に完全移行
+    - _make_cached_object()も削除
+    - test04/test10のレイヤーファイルを+resize方式に書き換え
 
-  ◆ チェックポイント処理の全面書き換え
-    - _compute_save_points(): RAA+FSP方式で保存点を最小化
-    - _checkpoint_cache_path(): signatureベースのパス計算
-      パス: artifacts/checkpoint/{src_hash[:8]}/{signature[:16]}.ext
-    - _build_unified_ops(): 2-tuple (type, op) に簡素化
-    - _process_checkpoints(): 保存点のみでcheckpoint生成
-    - _find_resume_point(): force地点より左のauto保存点のみresume候補
-    - _ensure_checkpoints(): bakeable ops判定で活性化
-    - _collect_checkpoint_cmds(): save_pointsベースで再構築
+  ◆ Web Object deps対応
+    - _WEB_KWARGSに"deps"追加
+    - Object.__init__: _web_deps初期化 + kwargs取得
+    - _web_cache_path(): deps fingerprintを含めるよう拡張
+    - subtitle/bubble/diagram: deps引数追加
 
-  ◆ Web Object signatureキャッシュ
-    - _web_cache_path(): テンプレートFFP + data + dur + fps + size + engine_ver
-    - パス: artifacts/web/{name}/{signature}.webm
-    - _build_web_cmd(): webm_path引数を追加
-
-  ◆ Layer signatureキャッシュ
-    - _layer_cache_paths(filename, project): signatureベースのパス計算
-    - パス: artifacts/layer/{basename}/{signature}.webm|.anchors.json
-    - 全呼び出し元(6箇所)を更新
-
-  ◆ Plan passでレイヤーキャッシュ不使用
-    - _plan_resolve(): 常に_exec_layer実行
-
-  ◆ Object.cache()非推奨化
-    - DeprecationWarning追加
-
-  ◆ テスト更新
-    - test_errors.py: 4テスト追加（26テスト）
-    - test22_checkpoint.py: ~resize → +resize に変更
-    - test15: signatureベースのダミーキャッシュパス生成
-    - 全22スナップショット再生成
+  ◆ テスト追加
+    - test23: move保存テスト（resize + move + scaleでmoveが消えない）
+    - test24: video checkpointテスト（動画transform-only → .webm）
+    - test_errors: FFP変化検出、checkpoint FFP署名、web deps引数の3件追加
+    - 全24スナップショット再生成（ENGINE_VER=2 + bakeable-only fingerprint）
 
 ============================================================
 12. 既知の制限・注意事項
 ============================================================
 
   1. overlay の enable='between()' で t=0 ジャストが拾われない場合がある
-  2. cache() + until() の組み合わせはplanモードで構造のみ作成
+  2. （廃止済み: cache()は削除されたため該当なし）
   3. 同一レイヤー内のオブジェクトは直列配置（並列は別レイヤー）
   4. anchor 循環参照の検出は未実装（反復回数上限+warnings.warn）
   5. Windows環境 (Python 3.10, ffmpeg 8.0) でのみテスト済み
@@ -482,7 +465,7 @@
   13. eval_at()は基本的な数学関数のみ対応
   14. テンプレートHTMLの座標系は正規化値(0.0〜1.0)
   15. ~演算子の意味: Transform/Effectではquality="fast"、AudioEffectでは無効化
-  16. Object.cache()は非推奨。policy/qualityベースのチェックポイントを使用すべき
+  16. Object.cache()は廃止済み。+resize等の自動チェックポイントを使用すること
   17. 既存スクリプトの~resizeはquality:fastに意味が変わる（破壊的変更）
 
 ============================================================

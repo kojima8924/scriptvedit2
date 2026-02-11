@@ -6,6 +6,7 @@ from scriptvedit import (
     again, move, fade, resize, AudioEffect, AudioEffectChain,
     subtitle, bubble, diagram, circle, label,
     Transform, TransformChain, Effect, EffectChain,
+    _checkpoint_cache_path, _file_fingerprint,
 )
 
 
@@ -393,6 +394,61 @@ def test_chain_force():
     return True, f"末尾policy=force, 先頭policy=auto"
 
 
+def test_ffp_change_detection():
+    """ファイル変更でfingerprintが変わることを確認"""
+    import time
+    tmp = os.path.join(tempfile.gettempdir(), "_test_ffp_change.png")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        ffp1 = _file_fingerprint(tmp)
+        # わずかに待ってから内容変更
+        time.sleep(0.05)
+        with open(tmp, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\xFF" * 200)
+        ffp2 = _file_fingerprint(tmp)
+        if ffp1 == ffp2:
+            return False, f"fingerprintが変わっていない: {ffp1}"
+        return True, f"ffp1={ffp1[1:]}, ffp2={ffp2[1:]}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_checkpoint_signature_uses_ffp():
+    """checkpoint signatureにFFPが含まれることを確認"""
+    import time
+    tmp = os.path.join(tempfile.gettempdir(), "_test_cp_sig.png")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        path1 = _checkpoint_cache_path(tmp, [])
+        time.sleep(0.05)
+        with open(tmp, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\xFF" * 200)
+        path2 = _checkpoint_cache_path(tmp, [])
+        if path1 == path2:
+            return False, "ファイル変更後もキャッシュパスが同じ"
+        return True, "ファイル変更でキャッシュパスが変化"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_web_deps_accepted():
+    """web Objectにdeps引数が渡せることを確認"""
+    old = Project._current
+    try:
+        p = Project()
+        p.configure(width=320, height=240, fps=1, background_color="black")
+        obj = subtitle("テスト", size=(320, 240), deps=["a.png", "b.png"])
+        if obj._web_deps == ["a.png", "b.png"]:
+            return True, f"deps={obj._web_deps}"
+        return False, f"deps={obj._web_deps}"
+    finally:
+        Project._current = old
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -420,6 +476,9 @@ ALL_TESTS = [
     ("-off演算子", test_off_operator),
     ("~fast品質", test_fast_quality),
     ("+chain force", test_chain_force),
+    ("FFP変化検出", test_ffp_change_detection),
+    ("checkpoint FFP署名", test_checkpoint_signature_uses_ffp),
+    ("web deps引数", test_web_deps_accepted),
 ]
 
 

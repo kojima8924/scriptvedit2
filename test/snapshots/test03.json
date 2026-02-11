@@ -11,17 +11,17 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/e1cffaed/b2cab2e8c56070e5.png",
+    "__cache__/artifacts/checkpoint/e1cffaed/e33e8c25b3733780.png",
     "-loop",
     "1",
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/2fdb2eec/b126dff720e46133.png",
+    "__cache__/artifacts/checkpoint/2fdb2eec/5d97099769b17f66.png",
     "-i",
-    "__cache__/artifacts/checkpoint/e795964e/01c1211f82c259b7.webm",
+    "__cache__/artifacts/checkpoint/e795964e/6507f5dd8c845cd1.webm",
     "-filter_complex",
-    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,5)'[v1];[v1][2:v]overlay=trunc((0.0+((1.0-0.0)*clip((t-0)/5/,0/,1)))*W-w/2):trunc((0.5+((0.5-0.5)*clip((t-0)/5/,0/,1)))*H-h/2):enable='between(t/,0/,5)'[v2];[v2][3:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,5)'[v3]",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,5)'[v1];[v1][2:v]overlay=trunc((0.0+((1.0-0.0)*clip((t-0)/5/,0/,1)))*W-w/2):trunc((0.5+((0.5-0.5)*clip((t-0)/5/,0/,1)))*H-h/2):enable='between(t/,0/,5)'[v2];[v2][3:v]overlay=trunc((1.0+((0.0-1.0)*clip((t-0)/5/,0/,1)))*W-w/2):trunc((0.3+((0.7-0.3)*clip((t-0)/5/,0/,1)))*H-h/2):enable='between(t/,0/,5)'[v3]",
     "-map",
     "[v3]",
     "-c:v",
@@ -34,7 +34,7 @@
     "test03.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/e1cffaed/b2cab2e8c56070e5.png": [
+    "__cache__/artifacts/checkpoint/e1cffaed/e33e8c25b3733780.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -45,9 +45,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/e1cffaed/b2cab2e8c56070e5.png"
+      "__cache__/artifacts/checkpoint/e1cffaed/e33e8c25b3733780.png"
     ],
-    "__cache__/artifacts/checkpoint/2fdb2eec/b126dff720e46133.png": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/5d97099769b17f66.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -58,9 +58,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/2fdb2eec/b126dff720e46133.png"
+      "__cache__/artifacts/checkpoint/2fdb2eec/5d97099769b17f66.png"
     ],
-    "__cache__/artifacts/checkpoint/e795964e/01c1211f82c259b7.webm": [
+    "__cache__/artifacts/checkpoint/e795964e/6507f5dd8c845cd1.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -83,7 +83,7 @@
       "0",
       "-t",
       "5",
-      "__cache__/artifacts/checkpoint/e795964e/01c1211f82c259b7.webm"
+      "__cache__/artifacts/checkpoint/e795964e/6507f5dd8c845cd1.webm"
     ]
   }
 }

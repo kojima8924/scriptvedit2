@@ -380,7 +380,7 @@ _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
-_ENGINE_VER = "1"
+_ENGINE_VER = "2"
 _BAKEABLE_EFFECTS = {"scale", "fade", "trim"}
 
 
@@ -451,7 +451,11 @@ def _compute_save_points(ops):
 
 def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, quality="final"):
     """チェックポイントのキャッシュファイルパスを計算（signature方式）"""
-    sigs = [original_source.replace("\\", "/")]
+    try:
+        ffp = _file_fingerprint(original_source)
+        sigs = [f"ffp={ffp}"]
+    except OSError:
+        sigs = [f"src={original_source.replace(chr(92), '/')}"]
     opfp = _op_prefix_fingerprint(ops)
     sigs.append(opfp)
     sigs.append(f"q={quality}")
@@ -479,6 +483,13 @@ def _build_unified_ops(obj):
     return ops
 
 
+def _split_ops(ops):
+    """ops列をbakeable/liveに分離"""
+    bakeable = [(t, op) for t, op in ops if _is_bakeable(t, op)]
+    live = [(t, op) for t, op in ops if not _is_bakeable(t, op)]
+    return bakeable, live
+
+
 def _web_cache_path(obj, project):
     """Web Objectのsignatureベースキャッシュパスを計算"""
     sigs = []
@@ -496,6 +507,14 @@ def _web_cache_path(obj, project):
     sigs.append(f"fps={fps}")
     if obj._web_size:
         sigs.append(f"size={obj._web_size[0]}x{obj._web_size[1]}")
+    if obj._web_deps:
+        deps_fps = []
+        for dep in sorted(obj._web_deps):
+            try:
+                deps_fps.append(str(_file_fingerprint(dep)))
+            except OSError:
+                deps_fps.append(dep)
+        sigs.append(f"deps={hashlib.sha256('|'.join(deps_fps).encode()).hexdigest()[:12]}")
     sigs.append(f"ev={_ENGINE_VER}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
     name = obj._web_name or "web"
@@ -895,15 +914,15 @@ class Project:
     def _process_checkpoints(self, obj):
         """1つのObjectのチェックポイント処理（実レンダ）"""
         ops = _build_unified_ops(obj)
+        bakeable_ops, live_ops = _split_ops(ops)
         # bakeable ops があるか確認
-        has_bakeable = any(_is_bakeable(typ, op) for typ, op in ops)
-        if not has_bakeable:
+        if not bakeable_ops:
             return
         # 全opがpolicy="off"ならスキップ
-        if all(getattr(op, 'policy', 'auto') == "off" for _, op in ops):
+        if all(getattr(op, 'policy', 'auto') == "off" for _, op in bakeable_ops):
             return
 
-        save_points = _compute_save_points(ops)
+        save_points = _compute_save_points(bakeable_ops)
         if not save_points:
             return
 
@@ -912,19 +931,19 @@ class Project:
         dur = obj.duration
         fps = self.fps
 
-        # 復元点チェック
-        resume_idx, resume_path = self._find_resume_point(original_source, ops, dur, fps, save_points)
+        # 復元点チェック（bakeable_opsベース）
+        resume_idx, resume_path = self._find_resume_point(original_source, bakeable_ops, dur, fps, save_points)
         if resume_idx is not None:
             current_source = resume_path
             current_media_type = _detect_media_type(resume_path)
-            remaining_ops = ops[resume_idx + 1:]
+            remaining_ops = bakeable_ops[resume_idx + 1:]
         else:
             current_source = original_source
             current_media_type = original_media_type
-            remaining_ops = list(ops)
+            remaining_ops = list(bakeable_ops)
 
         # 前方実行: 保存点でのみチェックポイント生成
-        executed = ops[:len(ops) - len(remaining_ops)]
+        executed = bakeable_ops[:len(bakeable_ops) - len(remaining_ops)]
         pos = 0
         while pos < len(remaining_ops):
             global_idx = len(executed) + pos
@@ -966,11 +985,12 @@ class Project:
                 continue
             pos += 1
 
-        # Objectを更新: source差し替え、残余opsを再設定
+        # Objectを更新: source差し替え、残余bakeable ops + live opsを再設定
         obj.source = current_source
         obj.media_type = current_media_type
         obj.transforms = [op for t, op in remaining_ops if t == "transform"]
-        obj.effects = [op for t, op in remaining_ops if t == "effect"]
+        obj.effects = ([op for t, op in remaining_ops if t == "effect"]
+                       + [op for t, op in live_ops if t == "effect"])
 
     def _find_resume_point(self, original_source, ops, duration, fps, save_points):
         """force地点より左のauto保存点のみresume候補"""
@@ -1004,12 +1024,11 @@ class Project:
         for obj in self.objects:
             if not isinstance(obj, Object):
                 continue
-            ops = _build_unified_ops(obj)
-            has_bakeable = any(_is_bakeable(typ, op) for typ, op in ops)
-            if not has_bakeable:
+            bakeable_ops, _ = _split_ops(_build_unified_ops(obj))
+            if not bakeable_ops:
                 continue
             # 全opがpolicy="off"ならスキップ
-            if all(getattr(op, 'policy', 'auto') == "off" for _, op in ops):
+            if all(getattr(op, 'policy', 'auto') == "off" for _, op in bakeable_ops):
                 continue
             self._process_checkpoints(obj)
 
@@ -1020,13 +1039,13 @@ class Project:
             if not isinstance(obj, Object):
                 continue
             ops = _build_unified_ops(obj)
-            has_bakeable = any(_is_bakeable(typ, op) for typ, op in ops)
-            if not has_bakeable:
+            bakeable_ops, live_ops = _split_ops(ops)
+            if not bakeable_ops:
                 continue
-            if all(getattr(op, 'policy', 'auto') == "off" for _, op in ops):
+            if all(getattr(op, 'policy', 'auto') == "off" for _, op in bakeable_ops):
                 continue
 
-            save_points = _compute_save_points(ops)
+            save_points = _compute_save_points(bakeable_ops)
             if not save_points:
                 continue
 
@@ -1038,12 +1057,12 @@ class Project:
 
             sorted_sps = sorted(save_points)
             for sp_idx in sorted_sps:
-                segment_ops = ops[:sp_idx + 1]
+                segment_ops = bakeable_ops[:sp_idx + 1]
                 has_effects = any(t == "effect" for t, _ in segment_ops)
                 is_video = _detect_media_type(original_source) in ("video",)
                 cp_dur = dur if (has_effects or is_video) else None
                 cp_fps = fps if cp_dur is not None else None
-                op = ops[sp_idx][1]
+                op = bakeable_ops[sp_idx][1]
                 quality = getattr(op, 'quality', 'final')
                 cache_path = _checkpoint_cache_path(
                     original_source, segment_ops, cp_dur, cp_fps, quality)
@@ -1053,8 +1072,8 @@ class Project:
                 prev_sps = [j for j in sorted_sps if j < sp_idx]
                 if prev_sps:
                     local_ops_start = prev_sps[-1] + 1
-                    prev_seg = ops[:prev_sps[-1] + 1]
-                    prev_op = ops[prev_sps[-1]][1]
+                    prev_seg = bakeable_ops[:prev_sps[-1] + 1]
+                    prev_op = bakeable_ops[prev_sps[-1]][1]
                     prev_has_eff = any(t == "effect" for t, _ in prev_seg)
                     prev_is_video = _detect_media_type(original_source) in ("video",)
                     current_source = _checkpoint_cache_path(
@@ -1064,7 +1083,7 @@ class Project:
                         getattr(prev_op, 'quality', 'final'))
                     current_media_type = _detect_media_type(current_source)
 
-                local_ops = ops[local_ops_start:sp_idx + 1]
+                local_ops = bakeable_ops[local_ops_start:sp_idx + 1]
                 local_transforms = [op for t, op in local_ops if t == "transform"]
                 local_effects = [op for t, op in local_ops if t == "effect"]
 
@@ -1080,8 +1099,8 @@ class Project:
 
             # Object source差し替え（最後の保存点）
             last_sp = sorted_sps[-1]
-            last_seg = ops[:last_sp + 1]
-            last_op = ops[last_sp][1]
+            last_seg = bakeable_ops[:last_sp + 1]
+            last_op = bakeable_ops[last_sp][1]
             last_has_eff = any(t == "effect" for t, _ in last_seg)
             last_is_video = _detect_media_type(original_source) in ("video",)
             last_path = _checkpoint_cache_path(
@@ -1091,9 +1110,10 @@ class Project:
                 getattr(last_op, 'quality', 'final'))
             obj.source = last_path
             obj.media_type = _detect_media_type(last_path)
-            remaining = ops[last_sp + 1:]
+            remaining = bakeable_ops[last_sp + 1:]
             obj.transforms = [op for t, op in remaining if t == "transform"]
-            obj.effects = [op for t, op in remaining if t == "effect"]
+            obj.effects = ([op for t, op in remaining if t == "effect"]
+                           + [op for t, op in live_ops if t == "effect"])
 
         return cmds
 
@@ -1232,78 +1252,6 @@ class Project:
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(cache_meta, f, indent=2, ensure_ascii=False)
         print(f"  アンカー保存: {json_path}")
-
-    def render_object(self, obj, output_path, *, bg=None, fps=None):
-        """単体Objectをレンダリングしてファイル出力"""
-        bg = bg or self.background_color
-        fps = fps or self.fps
-        dur = obj.duration or 5
-        is_image_out = _detect_media_type(output_path) == "image"
-
-        if is_image_out:
-            cmd = self._build_image_cache_cmd(obj, output_path)
-        else:
-            cmd = self._build_video_cache_cmd(obj, output_path, bg=bg, fps=fps, dur=dur)
-
-        print(f"キャッシュ生成: {output_path}")
-        print(f"  ffmpeg {' '.join(cmd[1:])}")
-        subprocess.run(cmd, check=True)
-        print(f"  完了: {output_path}")
-
-    def _build_image_cache_cmd(self, obj, output_path):
-        """画像キャッシュ: 背景なし、Transformのみ適用して透過PNG出力"""
-        filters = _build_transform_filters(obj)
-        cmd = ["ffmpeg", "-y", "-i", obj.source]
-        if filters:
-            cmd.extend(["-vf", ",".join(filters)])
-        cmd.extend(["-frames:v", "1", "-pix_fmt", "rgba", output_path])
-        return cmd
-
-    def _build_video_cache_cmd(self, obj, output_path, *, bg, fps, dur):
-        """動画キャッシュ: 背景あり、全Effect適用"""
-        inputs = []
-        filter_parts = []
-
-        inputs.extend([
-            "-f", "lavfi",
-            "-i", f"color=c={bg}:s={self.width}x{self.height}:d={dur}:r={fps}",
-        ])
-
-        if obj.media_type == "image":
-            inputs.extend(["-loop", "1", "-r", str(fps), "-i", obj.source])
-        else:
-            inputs.extend(["-i", obj.source])
-
-        base_dims = _get_base_dimensions(obj)
-        obj_filters = _build_transform_filters(obj)
-        eff_filters, pad_size = _build_effect_filters(obj, 0, dur, base_dims=base_dims)
-        obj_filters.extend(eff_filters)
-
-        obj_label = "[obj1]"
-        if obj_filters:
-            filter_parts.append(f"[1:v]{','.join(obj_filters)}{obj_label}")
-        else:
-            obj_label = "[1:v]"
-
-        x_expr, y_expr = _build_move_exprs(obj, 0, dur, pad_size=pad_size)
-
-        out_label = "[vout]"
-        filter_parts.append(f"[0:v]{obj_label}overlay={x_expr}:{y_expr}{out_label}")
-
-        cmd = ["ffmpeg", "-y"]
-        cmd.extend(inputs)
-
-        if filter_parts:
-            cmd.extend(["-filter_complex", ";".join(filter_parts)])
-            cmd.extend(["-map", out_label])
-
-        cmd.extend([
-            "-c:v", "libx264",
-            "-t", str(dur),
-            "-pix_fmt", "yuv420p",
-            output_path,
-        ])
-        return cmd
 
     def _build_ffmpeg_cmd(self, output_path):
         inputs = []
@@ -1833,7 +1781,7 @@ class Pause:
         return self
 
 
-_WEB_KWARGS = {"duration", "size", "fps", "data", "name", "debug_frames"}
+_WEB_KWARGS = {"duration", "size", "fps", "data", "name", "debug_frames", "deps"}
 
 
 class Object:
@@ -1856,6 +1804,7 @@ class Object:
         self._web_data = {}
         self._web_name = None
         self._web_debug_frames = False
+        self._web_deps = []
 
         # web Object のバリデーションと属性設定
         if self.media_type == "web":
@@ -1875,6 +1824,7 @@ class Object:
             self._web_data = kwargs.get("data", {})
             self._web_name = kwargs.get("name") or os.path.splitext(os.path.basename(source))[0]
             self._web_debug_frames = kwargs.get("debug_frames", False)
+            self._web_deps = kwargs.get("deps", [])
         elif kwargs:
             raise TypeError(
                 f"キーワード引数は web Object (.html/.htm) 専用です: "
@@ -1962,56 +1912,6 @@ class Object:
         else:
             raise TypeError(f"Object <= に渡せるのは Transform/Effect/AudioEffect 等のみ: {type(rhs)}")
         return self
-
-    def _make_cached_object(self, path):
-        """キャッシュObject（transforms/effectsなし）を生成してProjectに登録"""
-        proj = Project._current
-        cached = Object.__new__(Object)
-        cached.source = path
-        cached.transforms = []
-        cached.effects = []
-        cached.audio_effects = []
-        cached.duration = self.duration
-        cached.start_time = self.start_time
-        cached.priority = self.priority
-        cached.media_type = _detect_media_type(path)
-        cached._until_anchor = self._until_anchor
-        cached._video_deleted = False
-        cached._audio_deleted = False
-        cached._has_video = True if cached.media_type != "audio" else False
-        cached._has_audio = True if cached.media_type != "image" else False
-        cached._web_source = None
-        cached._web_size = None
-        cached._web_fps = None
-        cached._web_data = {}
-        cached._web_name = None
-        cached._web_debug_frames = False
-        if proj is not None and self in proj.objects:
-            idx = proj.objects.index(self)
-            proj.objects[idx] = cached
-        return cached
-
-    def cache(self, path, *, overwrite=True, bg=None, fps=None):
-        """単体レンダしてキャッシュファイルを生成、そのファイルを sourceに持つ新Objectを返す
-        非推奨: policy/qualityベースのチェックポイントを使用してください"""
-        warnings.warn(
-            "Object.cache() は非推奨です。"
-            "+op (policy='force') によるチェックポイントを使用してください。",
-            DeprecationWarning, stacklevel=2)
-        proj = Project._current
-        if proj is None:
-            raise RuntimeError("cache()にはアクティブなProjectが必要です")
-        if proj._mode == "plan":
-            # Planモード: renderと同形式のオブジェクトを返す（ファイル生成なし）
-            return self._make_cached_object(path)
-        if overwrite or not os.path.exists(path):
-            proj.render_object(self, path, bg=bg, fps=fps)
-        return self._make_cached_object(path)
-
-    @classmethod
-    def load_cache(cls, path):
-        """キャッシュファイルからObjectを生成"""
-        return cls(path)
 
     def length(self):
         """加工後の再生時間を返す（ffprobe + 時間影響エフェクト反映）"""
@@ -2300,19 +2200,22 @@ def _resolve_size(size):
 
 
 def subtitle(text, who=None, duration=2.5, *, style=None, size=None,
-             name=None, debug_frames=False):
+             name=None, debug_frames=False, deps=None):
     """字幕テンプレートObjectを生成"""
     size = _resolve_size(size)
     tpl = _template_path("subtitle.html")
     data = {"text": text, "who": who, "style": style or {}}
     if name is None:
         name = f"subtitle_{_data_hash(data)}"
-    return Object(tpl, duration=duration, size=size, data=data,
-                  name=name, debug_frames=debug_frames)
+    kw = dict(duration=duration, size=size, data=data,
+              name=name, debug_frames=debug_frames)
+    if deps is not None:
+        kw["deps"] = deps
+    return Object(tpl, **kw)
 
 
 def bubble(text, duration=2.5, *, anchor=None, pos=None, box=None,
-           style=None, size=None, name=None, debug_frames=False):
+           style=None, size=None, name=None, debug_frames=False, deps=None):
     """吹き出しテンプレートObjectを生成"""
     size = _resolve_size(size)
     tpl = _template_path("bubble.html")
@@ -2323,20 +2226,26 @@ def bubble(text, duration=2.5, *, anchor=None, pos=None, box=None,
             "style": style or {}}
     if name is None:
         name = f"bubble_{_data_hash(data)}"
-    return Object(tpl, duration=duration, size=size, data=data,
-                  name=name, debug_frames=debug_frames)
+    kw = dict(duration=duration, size=size, data=data,
+              name=name, debug_frames=debug_frames)
+    if deps is not None:
+        kw["deps"] = deps
+    return Object(tpl, **kw)
 
 
 def diagram(objects, duration=3.0, *, style=None, size=None,
-            name=None, debug_frames=False):
+            name=None, debug_frames=False, deps=None):
     """SVG図解テンプレートObjectを生成"""
     size = _resolve_size(size)
     tpl = _template_path("diagram_svg.html")
     data = {"objects": objects, "style": style or {}}
     if name is None:
         name = f"diagram_{_data_hash(data)}"
-    return Object(tpl, duration=duration, size=size, data=data,
-                  name=name, debug_frames=debug_frames)
+    kw = dict(duration=duration, size=size, data=data,
+              name=name, debug_frames=debug_frames)
+    if deps is not None:
+        kw["deps"] = deps
+    return Object(tpl, **kw)
 
 
 # --- 図形ビルダー ---
