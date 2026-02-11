@@ -1408,7 +1408,12 @@ class Project:
             elif obj.media_type == "audio":
                 inputs.extend(["-i", obj.source])
             else:  # video
-                inputs.extend(["-i", obj.source])
+                # WebM(VP9 alpha)はlibvpx-vp9デコーダが必要
+                # (ffmpeg 8.0のネイティブVP9デコーダはalpha非対応)
+                if obj.source.lower().endswith(".webm"):
+                    inputs.extend(["-c:v", "libvpx-vp9", "-i", obj.source])
+                else:
+                    inputs.extend(["-i", obj.source])
 
         # --- 映像チェーン ---
         current_base = "[0:v]"

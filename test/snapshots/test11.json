@@ -12,6 +12,8 @@
     "30",
     "-i",
     "__cache__/artifacts/checkpoint/fc0def09/4f2d35cf1e24c522.png",
+    "-c:v",
+    "libvpx-vp9",
     "-i",
     "__cache__/artifacts/checkpoint/2fdb2eec/e616682012f8e6e6.webm",
     "-filter_complex",

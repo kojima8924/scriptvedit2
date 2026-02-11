@@ -6,6 +6,8 @@
     "lavfi",
     "-i",
     "color=c=black:s=1280x720:d=2.0:r=30",
+    "-c:v",
+    "libvpx-vp9",
     "-i",
     "__cache__/artifacts/web/test19_scene/aaa8e631184650d0.webm",
     "-filter_complex",

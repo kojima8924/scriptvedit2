@@ -6,6 +6,8 @@
     "lavfi",
     "-i",
     "color=c=black:s=1280x720:d=3:r=30",
+    "-c:v",
+    "libvpx-vp9",
     "-i",
     "__cache__/artifacts/checkpoint/2fdb2eec/7c5305d81f974e08.webm",
     "-filter_complex",

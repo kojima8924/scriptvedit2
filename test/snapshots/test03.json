@@ -18,6 +18,8 @@
     "30",
     "-i",
     "__cache__/artifacts/checkpoint/2fdb2eec/5d97099769b17f66.png",
+    "-c:v",
+    "libvpx-vp9",
     "-i",
     "__cache__/artifacts/checkpoint/e795964e/6507f5dd8c845cd1.webm",
     "-filter_complex",
