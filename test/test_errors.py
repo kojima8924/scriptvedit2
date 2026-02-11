@@ -3,7 +3,7 @@ import sys, os, tempfile
 sys.path.insert(0, "..")
 from scriptvedit import (
     _resolve_param, Project, P, Object, VideoView, AudioView,
-    again, move, fade, resize, AudioEffect, AudioEffectChain,
+    again, move, fade, resize, morph_to, AudioEffect, AudioEffectChain,
     subtitle, bubble, diagram, circle, label,
     Transform, TransformChain, Effect, EffectChain,
     _checkpoint_cache_path, _file_fingerprint,
@@ -523,6 +523,47 @@ def test_video_with_time_uses_specified_duration():
             os.unlink(temp_path)
 
 
+def test_morph_to_non_object():
+    """morph_to に Object 以外 → TypeError"""
+    p = Project()
+    try:
+        morph_to("not_an_object")
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "Object のみ" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_morph_to_not_last():
+    """morph_to が bakeable ops の末尾でない → ValueError"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'img1 = Object("../onigiri_tenmusu.png")\n'
+        'img2 = Object("../figure_cafe.png")\n'
+        'img1.time(3) <= morph_to(img2)\n'
+        'img1 <= scale(0.5)\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_morph_order.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=320, height=240, fps=1, background_color="black")
+        p.layer(temp_path, priority=0)
+        p.render("_tmp_morph.mp4", dry_run=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "morph_to" in msg and "末尾" in msg:
+            return True, msg.split('\n')[0]
+        return False, f"メッセージが不適切: {msg}"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -555,6 +596,8 @@ ALL_TESTS = [
     ("web deps引数", test_web_deps_accepted),
     ("video time未指定checkpoint", test_video_no_time_checkpoint_has_duration),
     ("video time指定checkpoint", test_video_with_time_uses_specified_duration),
+    ("morph_to非Object", test_morph_to_non_object),
+    ("morph_to末尾でない", test_morph_to_not_last),
 ]
 
 

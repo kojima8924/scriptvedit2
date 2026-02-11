@@ -275,6 +275,14 @@ def setup_test25():
     return p.render("test25.mp4", dry_run=True)
 
 
+def setup_test26():
+    """morph_toテスト: 画像→画像のモーフィング"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test26_morph.py", priority=0)
+    return p.render("test26.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -301,6 +309,7 @@ ALL_TESTS = [
     ("test23", setup_test23),
     ("test24", setup_test24),
     ("test25", setup_test25),
+    ("test26", setup_test26),
 ]
 
 

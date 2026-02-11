@@ -1,0 +1,47 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=1280x720:d=3:r=30",
+    "-i",
+    "__cache__/artifacts/morph/2fdb2eec/16fa42d635f1571b.webm",
+    "-filter_complex",
+    "[0:v][1:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,3)'[v1]",
+    "-map",
+    "[v1]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "3",
+    "test26.mp4"
+  ],
+  "cache": {
+    "__cache__/artifacts/morph/2fdb2eec/16fa42d635f1571b.webm": [
+      "ffmpeg",
+      "-y",
+      "-framerate",
+      "30",
+      "-i",
+      "__morph_frames__/frame_%05d.png",
+      "-c:v",
+      "libvpx-vp9",
+      "-pix_fmt",
+      "yuva420p",
+      "-b:v",
+      "0",
+      "-crf",
+      "30",
+      "-auto-alt-ref",
+      "0",
+      "-t",
+      "3",
+      "__cache__/artifacts/morph/2fdb2eec/16fa42d635f1571b.webm"
+    ]
+  }
+}

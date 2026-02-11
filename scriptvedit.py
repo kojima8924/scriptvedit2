@@ -11,7 +11,7 @@ __all__ = [
     "AudioEffect", "AudioEffectChain",
     "VideoView", "AudioView",
     # ファクトリ関数
-    "resize", "scale", "fade", "move",
+    "resize", "scale", "fade", "move", "morph_to",
     "again", "afade", "adelete", "delete", "trim", "atrim", "atempo",
     # アンカー/同期
     "anchor", "pause",
@@ -381,7 +381,7 @@ _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
 _ENGINE_VER = "2"
-_BAKEABLE_EFFECTS = {"scale", "fade", "trim"}
+_BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to"}
 
 
 def _file_fingerprint(path):
@@ -401,6 +401,13 @@ def _op_fingerprint_str(op):
     quality = getattr(op, 'quality', 'final')
     parts.append(f"p={policy}")
     parts.append(f"q={quality}")
+    # morph_to: ターゲット画像のFFPをsignatureに含める
+    if op.name == "morph_to" and hasattr(op, '_morph_target'):
+        try:
+            tgt_ffp = _file_fingerprint(op._morph_target.source)
+            parts.append(f"tgt_ffp={tgt_ffp}")
+        except OSError:
+            parts.append(f"tgt_src={op._morph_target.source}")
     return "|".join(parts)
 
 
@@ -471,6 +478,45 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
     src_hash = hashlib.sha256(original_source.replace("\\", "/").encode()).hexdigest()[:8]
     cache_dir = os.path.join(_ARTIFACT_DIR, "checkpoint", src_hash)
     return os.path.join(cache_dir, f"{key}{ext}")
+
+
+def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
+    """morph WebMのキャッシュパスを計算"""
+    try:
+        sigs = [f"ffp={_file_fingerprint(src_path)}"]
+    except OSError:
+        sigs = [f"src={src_path.replace(chr(92), '/')}"]
+    # ターゲットFFP
+    if hasattr(morph_op, '_morph_target'):
+        try:
+            sigs.append(f"tgt_ffp={_file_fingerprint(morph_op._morph_target.source)}")
+        except OSError:
+            sigs.append(f"tgt_src={morph_op._morph_target.source}")
+    sigs.append(f"op={_op_fingerprint_str(morph_op)}")
+    sigs.append(f"dur={duration}")
+    sigs.append(f"fps={fps}")
+    sigs.append(f"q={quality}")
+    sigs.append(f"ev={_ENGINE_VER}")
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    src_hash = hashlib.sha256(src_path.replace("\\", "/").encode()).hexdigest()[:8]
+    cache_dir = os.path.join(_ARTIFACT_DIR, "morph", src_hash)
+    return os.path.join(cache_dir, f"{key}.webm")
+
+
+def _validate_morph_position(bakeable_ops):
+    """morph_toがbakeable opsの末尾であることを検証"""
+    morph_idx = None
+    for i, (typ, op) in enumerate(bakeable_ops):
+        if typ == "effect" and op.name == "morph_to":
+            morph_idx = i
+    if morph_idx is None:
+        return
+    # morph_to の後に他のbakeable opがあればエラー
+    for i in range(morph_idx + 1, len(bakeable_ops)):
+        raise ValueError(
+            f"morph_to はbakeable opsの末尾に配置してください。"
+            f"morph_to(idx={morph_idx})の後に "
+            f"{bakeable_ops[i][1].name}(idx={i})があります。")
 
 
 def _build_unified_ops(obj):
@@ -911,6 +957,15 @@ class Project:
         ])
         return cmd
 
+    def _build_morph_webm_cmd(self, frame_pattern, cache_path, duration, fps, quality="final"):
+        """PNG連番 → alpha webm のffmpegコマンドを構築"""
+        crf = "40" if quality == "fast" else "30"
+        return ["ffmpeg", "-y", "-framerate", str(fps),
+                "-i", frame_pattern,
+                "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
+                "-b:v", "0", "-crf", crf, "-auto-alt-ref", "0",
+                "-t", str(duration), cache_path]
+
     def _process_checkpoints(self, obj):
         """1つのObjectのチェックポイント処理（実レンダ）"""
         ops = _build_unified_ops(obj)
@@ -921,6 +976,8 @@ class Project:
         # 全opがpolicy="off"ならスキップ
         if all(getattr(op, 'policy', 'auto') == "off" for _, op in bakeable_ops):
             return
+
+        _validate_morph_position(bakeable_ops)
 
         save_points = _compute_save_points(bakeable_ops)
         if not save_points:
@@ -958,30 +1015,60 @@ class Project:
                 cp_dur = dur if (has_effects or is_video) else None
                 cp_fps = fps if cp_dur is not None else None
                 quality = getattr(op, 'quality', 'final')
-                cache_path = _checkpoint_cache_path(
-                    original_source, segment_ops, cp_dur, cp_fps, quality)
 
-                policy = getattr(op, 'policy', 'auto')
-                need_render = (policy == "force") or not os.path.exists(cache_path)
-                if need_render:
-                    local_ops = remaining_ops[:pos + 1]
-                    local_transforms = [op for t, op in local_ops if t == "transform"]
-                    local_effects = [op for t, op in local_ops if t == "effect"]
+                # morph_to 分岐
+                if typ == "effect" and op.name == "morph_to" and hasattr(op, '_morph_target'):
+                    morph_path = _morph_cache_path(current_source, op, dur, fps, quality)
+                    policy = getattr(op, 'policy', 'auto')
+                    need_render = (policy == "force") or not os.path.exists(morph_path)
+                    if need_render:
+                        import tempfile
+                        from morph import generate_rgba_frames
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            n_frames = int(fps * dur)
+                            # blend Exprを数値関数に変換
+                            blend_expr = op.params.get("blend")
+                            if blend_expr is not None and isinstance(blend_expr, Expr):
+                                blend_fn = lambda t, _e=blend_expr: _e.eval_at(t)
+                            else:
+                                blend_fn = None
+                            morph_kw = {k: v for k, v in op.params.items() if k != "blend"}
+                            generate_rgba_frames(
+                                current_source, op._morph_target.source,
+                                tmpdir, n_frames, blend_fn=blend_fn, **morph_kw)
+                            frame_pattern = os.path.join(tmpdir, "frame_%05d.png")
+                            os.makedirs(os.path.dirname(morph_path), exist_ok=True)
+                            cmd = self._build_morph_webm_cmd(
+                                frame_pattern, morph_path, dur, fps, quality)
+                            print(f"モーフキャッシュ保存: {morph_path}")
+                            subprocess.run(cmd, check=True)
+                    current_source = morph_path
+                    current_media_type = "video"
+                else:
+                    cache_path = _checkpoint_cache_path(
+                        original_source, segment_ops, cp_dur, cp_fps, quality)
 
-                    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-                    if cp_dur is None:
-                        cmd = self._build_checkpoint_image_cmd(
-                            current_source, local_transforms, cache_path, quality)
-                    else:
-                        cmd = self._build_checkpoint_video_cmd(
-                            current_source, current_media_type,
-                            local_transforms, local_effects,
-                            cache_path, cp_dur, fps, quality)
-                    print(f"チェックポイント保存: {cache_path}")
-                    subprocess.run(cmd, check=True)
+                    policy = getattr(op, 'policy', 'auto')
+                    need_render = (policy == "force") or not os.path.exists(cache_path)
+                    if need_render:
+                        local_ops = remaining_ops[:pos + 1]
+                        local_transforms = [op for t, op in local_ops if t == "transform"]
+                        local_effects = [op for t, op in local_ops if t == "effect"]
 
-                current_source = cache_path
-                current_media_type = _detect_media_type(cache_path)
+                        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                        if cp_dur is None:
+                            cmd = self._build_checkpoint_image_cmd(
+                                current_source, local_transforms, cache_path, quality)
+                        else:
+                            cmd = self._build_checkpoint_video_cmd(
+                                current_source, current_media_type,
+                                local_transforms, local_effects,
+                                cache_path, cp_dur, fps, quality)
+                        print(f"チェックポイント保存: {cache_path}")
+                        subprocess.run(cmd, check=True)
+                    current_source = cache_path
+                    current_media_type = _detect_media_type(cache_path)
+
                 executed = executed + remaining_ops[:pos + 1]
                 remaining_ops = remaining_ops[pos + 1:]
                 pos = 0
@@ -1048,6 +1135,8 @@ class Project:
             if all(getattr(op, 'policy', 'auto') == "off" for _, op in bakeable_ops):
                 continue
 
+            _validate_morph_position(bakeable_ops)
+
             save_points = _compute_save_points(bakeable_ops)
             if not save_points:
                 continue
@@ -1068,52 +1157,75 @@ class Project:
                 is_video = _detect_media_type(original_source) in ("video",)
                 cp_dur = dur if (has_effects or is_video) else None
                 cp_fps = fps if cp_dur is not None else None
-                op = bakeable_ops[sp_idx][1]
-                quality = getattr(op, 'quality', 'final')
-                cache_path = _checkpoint_cache_path(
-                    original_source, segment_ops, cp_dur, cp_fps, quality)
+                sp_typ, sp_op = bakeable_ops[sp_idx]
+                quality = getattr(sp_op, 'quality', 'final')
 
-                # current_source → checkpoint のコマンド構築
-                local_ops_start = 0
+                # current_sourceの解決（前の保存点からの更新）
                 prev_sps = [j for j in sorted_sps if j < sp_idx]
                 if prev_sps:
-                    local_ops_start = prev_sps[-1] + 1
-                    prev_seg = bakeable_ops[:prev_sps[-1] + 1]
-                    prev_op = bakeable_ops[prev_sps[-1]][1]
-                    prev_has_eff = any(t == "effect" for t, _ in prev_seg)
-                    prev_is_video = _detect_media_type(original_source) in ("video",)
-                    current_source = _checkpoint_cache_path(
-                        original_source, prev_seg,
-                        dur if (prev_has_eff or prev_is_video) else None,
-                        fps if (prev_has_eff or prev_is_video) else None,
-                        getattr(prev_op, 'quality', 'final'))
+                    prev_sp_idx = prev_sps[-1]
+                    prev_sp_typ, prev_sp_op = bakeable_ops[prev_sp_idx]
+                    # 前の保存点がmorph_toの場合
+                    if prev_sp_typ == "effect" and prev_sp_op.name == "morph_to" and hasattr(prev_sp_op, '_morph_target'):
+                        current_source = _morph_cache_path(
+                            current_source, prev_sp_op, dur, fps,
+                            getattr(prev_sp_op, 'quality', 'final'))
+                    else:
+                        prev_seg = bakeable_ops[:prev_sp_idx + 1]
+                        prev_has_eff = any(t == "effect" for t, _ in prev_seg)
+                        prev_is_video = _detect_media_type(original_source) in ("video",)
+                        current_source = _checkpoint_cache_path(
+                            original_source, prev_seg,
+                            dur if (prev_has_eff or prev_is_video) else None,
+                            fps if (prev_has_eff or prev_is_video) else None,
+                            getattr(prev_sp_op, 'quality', 'final'))
                     current_media_type = _detect_media_type(current_source)
 
-                local_ops = bakeable_ops[local_ops_start:sp_idx + 1]
-                local_transforms = [op for t, op in local_ops if t == "transform"]
-                local_effects = [op for t, op in local_ops if t == "effect"]
-
-                if cp_dur is None:
-                    cmd = self._build_checkpoint_image_cmd(
-                        current_source, local_transforms, cache_path, quality)
+                # morph_to 分岐
+                if sp_typ == "effect" and sp_op.name == "morph_to" and hasattr(sp_op, '_morph_target'):
+                    morph_path = _morph_cache_path(current_source, sp_op, dur, fps, quality)
+                    frame_pattern = os.path.join("__morph_frames__", "frame_%05d.png")
+                    cmd = self._build_morph_webm_cmd(
+                        frame_pattern, morph_path, dur, fps, quality)
+                    cmds[morph_path] = cmd
                 else:
-                    cmd = self._build_checkpoint_video_cmd(
-                        current_source, current_media_type,
-                        local_transforms, local_effects,
-                        cache_path, cp_dur, fps, quality)
-                cmds[cache_path] = cmd
+                    cache_path = _checkpoint_cache_path(
+                        original_source, segment_ops, cp_dur, cp_fps, quality)
+
+                    local_ops_start = 0
+                    if prev_sps:
+                        local_ops_start = prev_sps[-1] + 1
+
+                    local_ops = bakeable_ops[local_ops_start:sp_idx + 1]
+                    local_transforms = [op for t, op in local_ops if t == "transform"]
+                    local_effects = [op for t, op in local_ops if t == "effect"]
+
+                    if cp_dur is None:
+                        cmd = self._build_checkpoint_image_cmd(
+                            current_source, local_transforms, cache_path, quality)
+                    else:
+                        cmd = self._build_checkpoint_video_cmd(
+                            current_source, current_media_type,
+                            local_transforms, local_effects,
+                            cache_path, cp_dur, fps, quality)
+                    cmds[cache_path] = cmd
 
             # Object source差し替え（最後の保存点）
             last_sp = sorted_sps[-1]
-            last_seg = bakeable_ops[:last_sp + 1]
-            last_op = bakeable_ops[last_sp][1]
-            last_has_eff = any(t == "effect" for t, _ in last_seg)
-            last_is_video = _detect_media_type(original_source) in ("video",)
-            last_path = _checkpoint_cache_path(
-                original_source, last_seg,
-                dur if (last_has_eff or last_is_video) else None,
-                fps if (last_has_eff or last_is_video) else None,
-                getattr(last_op, 'quality', 'final'))
+            last_typ, last_op = bakeable_ops[last_sp]
+            if last_typ == "effect" and last_op.name == "morph_to" and hasattr(last_op, '_morph_target'):
+                last_path = _morph_cache_path(
+                    current_source, last_op, dur, fps,
+                    getattr(last_op, 'quality', 'final'))
+            else:
+                last_seg = bakeable_ops[:last_sp + 1]
+                last_has_eff = any(t == "effect" for t, _ in last_seg)
+                last_is_video = _detect_media_type(original_source) in ("video",)
+                last_path = _checkpoint_cache_path(
+                    original_source, last_seg,
+                    dur if (last_has_eff or last_is_video) else None,
+                    fps if (last_has_eff or last_is_video) else None,
+                    getattr(last_op, 'quality', 'final'))
             obj.source = last_path
             obj.media_type = _detect_media_type(last_path)
             remaining = bakeable_ops[last_sp + 1:]
@@ -1435,7 +1547,7 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
     filters = []
     pad_size = None
     for e in obj.effects:
-        if e.name in ("move", "trim", "delete"):
+        if e.name in ("move", "trim", "delete", "morph_to"):
             continue
         if e.name == "scale":
             scale_expr = e.params.get("value", Const(1))
@@ -1735,7 +1847,10 @@ class Effect:
         """属性をコピーした新Effectを返す"""
         kw = dict(policy=self.policy, quality=self.quality, **self.params)
         kw.update(overrides)
-        return Effect(self.name, **kw)
+        new = Effect(self.name, **kw)
+        if hasattr(self, '_morph_target'):
+            new._morph_target = self._morph_target
+        return new
 
     def __and__(self, other):
         """Effect & Effect/EffectChain → EffectChain"""
@@ -2093,6 +2208,23 @@ def move(**kwargs):
     if "anchor" in kwargs:
         resolved["anchor"] = kwargs["anchor"]
     return Effect("move", **resolved)
+
+
+def morph_to(target, blend=None, **morph_params):
+    """モーフィングEffect: 画像→画像の最適輸送モーフ動画を生成"""
+    if not isinstance(target, Object):
+        raise TypeError(f"morph_to の target は Object のみ: {type(target)}")
+    # ターゲットObjectをProjectから除外（morphに消費される）
+    proj = Project._current
+    if proj is not None and target in proj.objects:
+        proj.objects.remove(target)
+    if blend is None:
+        blend = _resolve_param(lambda u: u * u * (3 - 2 * u))
+    else:
+        blend = _resolve_param(blend)
+    eff = Effect("morph_to", blend=blend, **morph_params)
+    eff._morph_target = target
+    return eff
 
 
 # --- 音声エフェクト関数 ---
