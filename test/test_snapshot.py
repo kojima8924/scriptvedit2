@@ -283,6 +283,22 @@ def setup_test26():
     return p.render("test26.mp4", dry_run=True)
 
 
+def setup_test27():
+    """rotate Transformテスト: 画像を30度回転（静的）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test27_rotate.py", priority=0)
+    return p.render("test27.mp4", dry_run=True)
+
+
+def setup_test28():
+    """rotate_to Effectテスト: 0→180度回転アニメーション + move保持"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test28_rotate_to.py", priority=0)
+    return p.render("test28.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -310,6 +326,8 @@ ALL_TESTS = [
     ("test24", setup_test24),
     ("test25", setup_test25),
     ("test26", setup_test26),
+    ("test27", setup_test27),
+    ("test28", setup_test28),
 ]
 
 

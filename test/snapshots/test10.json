@@ -72,7 +72,7 @@
       "-i",
       "__cache__/artifacts/checkpoint/2fdb2eec/813a576cf5e1d1ec.png",
       "-vf",
-      "scale=w='trunc(iw*((0.8+((1-0.8)*clip((t-0)/5/,0/,1))))/2)*2':h='trunc(ih*((0.8+((1-0.8)*clip((t-0)/5/,0/,1))))/2)*2':eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/5/,0/,1)/,0/,1)'",
+      "scale=w='trunc(iw*((0.8+((1-0.8)*clip((t-0)/5/,0/,1))))/2)*2':h='trunc(ih*((0.8+((1-0.8)*clip((t-0)/5/,0/,1))))/2)*2':eval=frame,format=rgba,pad=258:320:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/5/,0/,1)/,0/,1)'",
       "-c:v",
       "libvpx-vp9",
       "-pix_fmt",

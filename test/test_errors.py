@@ -3,7 +3,7 @@ import sys, os, tempfile
 sys.path.insert(0, "..")
 from scriptvedit import (
     _resolve_param, Project, P, Object, VideoView, AudioView,
-    again, move, fade, resize, morph_to, AudioEffect, AudioEffectChain,
+    again, move, fade, resize, rotate, rotate_to, morph_to, AudioEffect, AudioEffectChain,
     subtitle, bubble, diagram, circle, label,
     Transform, TransformChain, Effect, EffectChain,
     _checkpoint_cache_path, _file_fingerprint,
@@ -564,6 +564,59 @@ def test_morph_to_not_last():
             os.unlink(temp_path)
 
 
+def test_rotate_no_args():
+    """rotate() に deg/rad なし → ValueError"""
+    try:
+        rotate()
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "deg" in msg and "rad" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_rotate_to_no_args():
+    """rotate_to() に deg/rad/from/to なし → ValueError"""
+    try:
+        rotate_to()
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "deg" in msg or "rad" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_rotate_to_preserves_move():
+    """rotate_to(bakeable) + move(live) → checkpoint後もmoveが残る"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'img = Object("../onigiri_tenmusu.png")\n'
+        'img <= resize(sx=0.5, sy=0.5)\n'
+        'img.time(2) <= rotate_to(from_deg=0, to_deg=90)\n'
+        'img <= move(x=0.3, y=0.7, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_rotate_move.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=320, height=240, fps=1, background_color="black")
+        p.layer(temp_path, priority=0)
+        result = p.render("_tmp_rotate_move.mp4", dry_run=True)
+        if not isinstance(result, dict):
+            return False, f"dictでない: {type(result)}"
+        # mainコマンドにoverlayがあること（moveが残っている）
+        main_cmd = " ".join(result["main"])
+        if "overlay" not in main_cmd:
+            return False, "overlayがmainコマンドにない（moveが消えた）"
+        return True, "rotate_to checkpoint後もmove保持"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -598,6 +651,9 @@ ALL_TESTS = [
     ("video time指定checkpoint", test_video_with_time_uses_specified_duration),
     ("morph_to非Object", test_morph_to_non_object),
     ("morph_to末尾でない", test_morph_to_not_last),
+    ("rotate引数なし", test_rotate_no_args),
+    ("rotate_to引数なし", test_rotate_to_no_args),
+    ("rotate_to move保持", test_rotate_to_preserves_move),
 ]
 
 

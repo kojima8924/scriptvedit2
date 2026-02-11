@@ -64,7 +64,7 @@
       "-i",
       "__cache__/artifacts/checkpoint/30924af7/e5f50dcf3b5714ba.png",
       "-vf",
-      "scale=w='trunc(iw*((0.8+((1-0.8)*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+((1-0.8)*clip((t-0)/3/,0/,1))))/2)*2':eval=frame",
+      "scale=w='trunc(iw*((0.8+((1-0.8)*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+((1-0.8)*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=340:340:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame",
       "-c:v",
       "libvpx-vp9",
       "-pix_fmt",

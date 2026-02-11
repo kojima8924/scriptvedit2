@@ -11,7 +11,7 @@ __all__ = [
     "AudioEffect", "AudioEffectChain",
     "VideoView", "AudioView",
     # ファクトリ関数
-    "resize", "scale", "fade", "move", "morph_to",
+    "resize", "rotate", "scale", "fade", "move", "morph_to", "rotate_to",
     "again", "afade", "adelete", "delete", "trim", "atrim", "atempo",
     # アンカー/同期
     "anchor", "pause",
@@ -381,7 +381,7 @@ _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
 _ENGINE_VER = "2"
-_BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to"}
+_BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to"}
 
 
 def _file_fingerprint(path):
@@ -917,6 +917,21 @@ class Project:
                 sx = t.params.get("sx", 1)
                 sy = t.params.get("sy", 1)
                 filters.append(f"scale=iw*{sx}:ih*{sy}")
+            elif t.name == "rotate":
+                ang = t.params.get("rad")
+                ang_str = ang.to_ffmpeg("u") if isinstance(ang, Expr) else str(ang)
+                expand = t.params.get("expand", False)
+                fill = t.params.get("fill", "0x00000000")
+                filters.append("format=rgba")
+                if expand:
+                    filters.append(
+                        f"rotate=angle='{ang_str}':fillcolor={fill}"
+                        f":ow='rotw({ang_str})':oh='roth({ang_str})'"
+                    )
+                else:
+                    filters.append(
+                        f"rotate=angle='{ang_str}':fillcolor={fill}:ow=iw:oh=ih"
+                    )
         cmd = ["ffmpeg", "-y", "-i", source]
         if filters:
             cmd.extend(["-vf", ",".join(filters)])
@@ -1535,6 +1550,21 @@ def _build_transform_filters(obj):
             sx = t.params.get("sx", 1)
             sy = t.params.get("sy", 1)
             filters.append(f"scale=iw*{sx}:ih*{sy}")
+        elif t.name == "rotate":
+            ang = t.params.get("rad")
+            ang_str = ang.to_ffmpeg("u") if isinstance(ang, Expr) else str(ang)
+            expand = t.params.get("expand", False)
+            fill = t.params.get("fill", "0x00000000")
+            filters.append("format=rgba")
+            if expand:
+                filters.append(
+                    f"rotate=angle='{ang_str}':fillcolor={fill}"
+                    f":ow='rotw({ang_str})':oh='roth({ang_str})'"
+                )
+            else:
+                filters.append(
+                    f"rotate=angle='{ang_str}':fillcolor={fill}:ow=iw:oh=ih"
+                )
     return filters
 
 
@@ -1577,6 +1607,24 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
             filters.append(
                 f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
             )
+        elif e.name == "rotate_to":
+            rad_expr = e.params.get("rad", Const(0))
+            u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+            ang_str = rad_expr.to_ffmpeg(u_expr)
+            expand = e.params.get("expand", True)
+            fill = e.params.get("fill", "0x00000000")
+            filters.append("format=rgba")
+            if expand:
+                # 動的回転: ow/ohは初期化時に1度だけ評価されるため
+                # rotw/rothではなく対角線長で固定サイズにする
+                filters.append(
+                    f"rotate=angle='{ang_str}':fillcolor={fill}"
+                    f":ow='hypot(iw,ih)':oh='hypot(iw,ih)'"
+                )
+            else:
+                filters.append(
+                    f"rotate=angle='{ang_str}':fillcolor={fill}:ow=iw:oh=ih"
+                )
     return filters, pad_size
 
 
@@ -2179,6 +2227,17 @@ def resize(**kwargs):
     return Transform("resize", **kwargs)
 
 
+def rotate(*, deg=None, rad=None, expand=False, fill="0x00000000"):
+    """固定角回転Transform。deg/radどちらか必須（deg優先）。"""
+    if deg is None and rad is None:
+        raise ValueError("rotate: deg または rad のどちらかが必要")
+    if rad is None:
+        rad_val = deg2rad(deg) if isinstance(deg, (int, float)) else deg2rad(deg)
+    else:
+        rad_val = _to_expr(rad) if isinstance(rad, (int, float)) else _to_expr(rad)
+    return Transform("rotate", rad=rad_val, expand=expand, fill=fill)
+
+
 # --- Effect関数 ---
 
 def scale(value=1):
@@ -2208,6 +2267,27 @@ def move(**kwargs):
     if "anchor" in kwargs:
         resolved["anchor"] = kwargs["anchor"]
     return Effect("move", **resolved)
+
+
+def rotate_to(deg=None, rad=None, *, from_deg=None, from_rad=None,
+              to_deg=None, to_rad=None, expand=True, fill="0x00000000"):
+    """時間依存回転Effect。deg/rad直接指定 or from/to でlerp。"""
+    has_from_to = any(v is not None for v in (from_deg, from_rad, to_deg, to_rad))
+    if has_from_to:
+        fr = _to_expr(from_rad) if from_rad is not None else (
+            deg2rad(from_deg) if from_deg is not None else Const(0))
+        tr = _to_expr(to_rad) if to_rad is not None else (
+            deg2rad(to_deg) if to_deg is not None else Const(0))
+        rad_expr = _resolve_param(lambda u: lerp(fr, tr, u))
+    else:
+        if deg is None and rad is None:
+            raise ValueError("rotate_to: deg/rad か from/to の指定が必要")
+        if rad is not None:
+            rad_expr = _resolve_param(rad)
+        else:
+            rad_expr = _resolve_param(
+                lambda u, _d=deg: deg2rad(_d) if isinstance(_d, (int, float)) else deg2rad(_d))
+    return Effect("rotate_to", rad=rad_expr, expand=expand, fill=fill)
 
 
 def morph_to(target, blend=None, **morph_params):

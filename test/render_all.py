@@ -184,6 +184,55 @@ def render_test21():
     p.render(out("test21.mp4"))
 
 
+def render_test22():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test22_checkpoint.py", priority=0)
+    p.render(out("test22.mp4"))
+
+
+def render_test23():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test23_move_preserve.py", priority=0)
+    p.render(out("test23.mp4"))
+
+
+def render_test24():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test24_video_checkpoint.py", priority=0)
+    p.render(out("test24.mp4"))
+
+
+def render_test25():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test25_video_no_time.py", priority=0)
+    p.render(out("test25.mp4"))
+
+
+def render_test26():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test26_morph.py", priority=0)
+    p.render(out("test26.mp4"))
+
+
+def render_test27():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test27_rotate.py", priority=0)
+    p.render(out("test27.mp4"))
+
+
+def render_test28():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test28_rotate_to.py", priority=0)
+    p.render(out("test28.mp4"))
+
+
 ALL_RENDERS = [
     ("test01", render_test01),
     ("test02", render_test02),
@@ -206,6 +255,13 @@ ALL_RENDERS = [
     ("test19", render_test19),
     ("test20", render_test20),
     ("test21", render_test21),
+    ("test22", render_test22),
+    ("test23", render_test23),
+    ("test24", render_test24),
+    ("test25", render_test25),
+    ("test26", render_test26),
+    ("test27", render_test27),
+    ("test28", render_test28),
 ]
 
 
