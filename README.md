@@ -20,11 +20,16 @@ onigiri.py     ... 素材レイヤー
 - `|` (パイプ) ... Transform同士を連結して TransformChain を生成
 - `&` (アンド) ... Effect同士を連結して EffectChain を生成
 - `<=` (適用) ... Object に TransformChain / EffectChain を適用
-- `~` (チルダ) ... autoチェックポイント（中間結果を自動キャッシュ）
-- `+` (プラス) ... makeチェックポイント（中間結果を強制再生成）
+- `~` (チルダ) ... quality="fast"（低品質で高速キャッシュ）
+- `+` (プラス) ... policy="force"（キャッシュを強制再生成）
+- `-` (マイナス) ... policy="off"（キャッシュ対象から除外）
+- 無印 ... policy="auto", quality="final"（右端のbakeable opを自動キャッシュ）
 
 ```python
-obj <= ~resize(sx=0.3, sy=0.3)    # resize結果をチェックポイント保存
+obj <= resize(sx=0.3, sy=0.3)     # 無印: autoポリシーで自動キャッシュ対象
+obj <= +resize(sx=0.3, sy=0.3)    # force: 常に再生成
+obj <= ~resize(sx=0.3, sy=0.3)    # fast: 低品質で高速キャッシュ
+obj <= -resize(sx=0.3, sy=0.3)    # off: キャッシュ対象から除外
 obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
                & scale(lambda u: lerp(0.5, 1, u)) \
                & fade(lambda u: u)
@@ -88,41 +93,44 @@ move(from_x=0.0, from_y=0.5, to_x=1.0, to_y=0.5, anchor="center")
 move(x=lambda u: lerp(0.2, 0.8, u), y=0.5, anchor="center")
 ```
 
-### チェックポイントキャッシュ
+### チェックポイントキャッシュ（policy/quality方式）
 
-Transform/Effectチェーン内の中間生成物を自動保存・復元する仕組み。
-`~op` (auto) / `+op` (make) の単項演算子でチェックポイントを指定。
-`__cache__/checkpoints/` 以下にPNG(画像) / WebM(動画)で保存される。
+bakeable ops（Transform全般 + scale/fade/trim Effect）の中間結果を自動保存・復元する仕組み。
+signatureベースでキャッシュの安全性を保証。保存点はRAA+FSPで最小化。
+
+**policy（キャッシュ制御）:**
+- `auto`（無印） ... キャッシュが存在すれば再利用、なければ生成。最右のbakeable opがRAA保存点
+- `force`（`+`） ... 常に再生成。FSP保存点
+- `off`（`-`） ... キャッシュ対象から除外
+
+**quality（品質制御）:**
+- `final`（無印） ... 通常品質（crf=30）
+- `fast`（`~`） ... 低品質で高速（crf=40）
 
 ```python
-# autoモード: キャッシュが存在すれば再利用、なければ生成
-obj <= ~resize(sx=0.3, sy=0.3)
+# 無印（auto+final）: 自動的に最右bakeableとしてキャッシュ
+obj <= resize(sx=0.3, sy=0.3)
 
-# makeモード: 常に再生成
+# force: 常に再生成
 obj <= +resize(sx=0.3, sy=0.3)
 
-# チェーン全体への糖衣構文（末尾にチェックポイント付与）
+# fast品質: 低品質で高速
+obj <= ~resize(sx=0.3, sy=0.3)
+
+# off: キャッシュ対象外
+obj <= -resize(sx=0.3, sy=0.3)
+
+# チェーン: ~chainで全opがfast品質、+chainで末尾がforce
 obj <= ~(resize(sx=0.5, sy=0.5) | resize(sx=0.3, sy=0.3))
+obj <= +(resize(sx=0.5, sy=0.5) | resize(sx=0.3, sy=0.3))
 ```
 
+キャッシュは `__cache__/artifacts/checkpoint/{src_hash}/{signature}.{ext}` に保存。
 AudioEffectの `~` は従来通り無効化として動作する。
 
-### キャッシュ
+### Object.cache()（非推奨）
 
-`Object.cache(path)` で単体レンダした結果をファイルに保存し、そのファイルを source に持つ新 Object を返す。
-
-```python
-# 画像キャッシュ（1フレーム）
-cached = obj.cache("cached.png")
-
-# 動画キャッシュ（duration分）
-cached = obj.cache("cached.mp4")
-
-# キャッシュ読み込み（既存ファイル）
-obj = Object.load_cache("cached.mp4")
-```
-
-`overwrite=False` を指定すると、既存ファイルがあればレンダをスキップして高速化。
+`Object.cache(path)` は非推奨です。policy/qualityベースのチェックポイントを使用してください。
 
 ### anchor / pause / until（クロスレイヤー同期）
 
@@ -230,7 +238,7 @@ cmd = p.render("output.mp4", dry_run=True)
 cd test
 python test_snapshot.py        # スナップショットテスト（22テスト）
 python test_snapshot.py --update  # スナップショット更新
-python test_errors.py          # エラーケーステスト（22テスト）
+python test_errors.py          # エラーケーステスト（26テスト）
 python test01_main.py          # 個別テスト（MP4生成）
 ```
 

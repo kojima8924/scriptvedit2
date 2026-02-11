@@ -6,7 +6,6 @@ from scriptvedit import (
     again, move, fade, resize, AudioEffect, AudioEffectChain,
     subtitle, bubble, diagram, circle, label,
     Transform, TransformChain, Effect, EffectChain,
-    _CheckpointTransform, _CheckpointEffect,
 )
 
 
@@ -310,47 +309,88 @@ def test_subtitle_with_explicit_size():
 
 
 def test_neg_transform():
-    """-resize() → TypeError"""
-    try:
-        _ = -resize(sx=0.5, sy=0.5)
-        return False, "例外が発生しませんでした"
-    except TypeError as e:
-        msg = str(e)
-        if "Transform" in msg and "-" in msg:
-            return True, msg
-        return False, f"メッセージが不適切: {msg}"
+    """-resize() → policy='off' のTransformを返す"""
+    result = -resize(sx=0.5, sy=0.5)
+    if not isinstance(result, Transform):
+        return False, f"型が不正: {type(result)}"
+    if result.policy != "off":
+        return False, f"policyが不正: {result.policy}"
+    return True, f"policy={result.policy}"
 
 
 def test_neg_effect():
-    """-scale(0.5) → TypeError"""
+    """-scale(0.5) → policy='off' のEffectを返す"""
     from scriptvedit import scale
-    try:
-        _ = -scale(0.5)
-        return False, "例外が発生しませんでした"
-    except TypeError as e:
-        msg = str(e)
-        if "Effect" in msg and "-" in msg:
-            return True, msg
-        return False, f"メッセージが不適切: {msg}"
+    result = -scale(0.5)
+    if not isinstance(result, Effect):
+        return False, f"型が不正: {type(result)}"
+    if result.policy != "off":
+        return False, f"policyが不正: {result.policy}"
+    return True, f"policy={result.policy}"
 
 
 def test_chain_sugar():
-    """~(tf1 | tf2) の末尾がcheckpoint"""
+    """~(tf1 | tf2) で全opがquality='fast'になる"""
     tf1 = resize(sx=0.5, sy=0.5)
     tf2 = resize(sx=0.3, sy=0.3)
     chain = tf1 | tf2
     result = ~chain
-    # result は TransformChain で、末尾が _CheckpointTransform(mode="auto")
+    if not isinstance(result, TransformChain):
+        return False, f"型が不正: {type(result)}"
+    # 全opがquality="fast"
+    for i, t in enumerate(result.transforms):
+        if not isinstance(t, Transform):
+            return False, f"transforms[{i}]がTransformでない: {type(t)}"
+        if t.quality != "fast":
+            return False, f"transforms[{i}].quality={t.quality} (期待: fast)"
+    return True, f"全{len(result.transforms)}opがquality=fast"
+
+
+def test_force_operator():
+    """+op で policy='force' 確認"""
+    result = +resize(sx=0.5, sy=0.5)
+    if not isinstance(result, Transform):
+        return False, f"型が不正: {type(result)}"
+    if result.policy != "force":
+        return False, f"policyが不正: {result.policy}"
+    return True, f"policy={result.policy}"
+
+
+def test_off_operator():
+    """-op で policy='off' 確認"""
+    result = -resize(sx=0.5, sy=0.5)
+    if not isinstance(result, Transform):
+        return False, f"型が不正: {type(result)}"
+    if result.policy != "off":
+        return False, f"policyが不正: {result.policy}"
+    return True, f"policy={result.policy}"
+
+
+def test_fast_quality():
+    """~op で quality='fast' 確認"""
+    result = ~resize(sx=0.5, sy=0.5)
+    if not isinstance(result, Transform):
+        return False, f"型が不正: {type(result)}"
+    if result.quality != "fast":
+        return False, f"qualityが不正: {result.quality}"
+    return True, f"quality={result.quality}"
+
+
+def test_chain_force():
+    """+chain で末尾policy='force' 確認"""
+    tf1 = resize(sx=0.5, sy=0.5)
+    tf2 = resize(sx=0.3, sy=0.3)
+    chain = tf1 | tf2
+    result = +chain
     if not isinstance(result, TransformChain):
         return False, f"型が不正: {type(result)}"
     last = result.transforms[-1]
-    if not isinstance(last, _CheckpointTransform):
-        return False, f"末尾が_CheckpointTransformでない: {type(last)}"
-    if last.mode != "auto":
-        return False, f"modeが不正: {last.mode}"
-    if result.transforms[0] is not tf1:
-        return False, "先頭がtf1でない"
-    return True, f"末尾=_CheckpointTransform(mode={last.mode})"
+    if last.policy != "force":
+        return False, f"末尾policy={last.policy} (期待: force)"
+    first = result.transforms[0]
+    if first.policy != "auto":
+        return False, f"先頭policy={first.policy} (期待: auto)"
+    return True, f"末尾policy=force, 先頭policy=auto"
 
 
 ALL_TESTS = [
@@ -376,6 +416,10 @@ ALL_TESTS = [
     ("-Transform", test_neg_transform),
     ("-Effect", test_neg_effect),
     ("~chain糖衣", test_chain_sugar),
+    ("+force演算子", test_force_operator),
+    ("-off演算子", test_off_operator),
+    ("~fast品質", test_fast_quality),
+    ("+chain force", test_chain_force),
 ]
 
 

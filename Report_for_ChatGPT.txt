@@ -1,7 +1,7 @@
 ============================================================
   scriptvedit2 プロジェクト状況レポート (Claude Code → ChatGPT)
   作成日: 2026-02-11
-  最終コミット: e39e49a
+  最終コミット: f38d42c
 ============================================================
 
 ============================================================
@@ -12,13 +12,13 @@
   「1ファイル = 1レイヤー」アーキテクチャを採用。
   main.py がオーケストレータ、各レイヤーは独立した .py ファイル。
 
-  コアファイル: scriptvedit.py (約2150行)
+  コアファイル: scriptvedit.py (約2260行)
   ライセンス: なし（個人プロジェクト）
   環境: Windows 11 / Python 3.10 / ffmpeg 8.0-full_build
 
   ◆ ファイル構成
     scriptvedit2/
-    ├── scriptvedit.py   ← コアライブラリ (約2150行)
+    ├── scriptvedit.py   ← コアライブラリ (約2260行)
     ├── main.py          ← オーケストレータ (デモ用)
     ├── bg.py            ← 背景レイヤー (デモ用)
     ├── onigiri.py       ← おにぎりレイヤー (デモ用)
@@ -55,7 +55,8 @@
     db63456 音声合成(amix) + AV split + length() + AudioEffect基盤の大型拡張
     d2ae888 web Object機能追加: HTMLテンプレート→透明webm(VP9 alpha)→合成パイプライン
     8132e4b テンプレート機能(subtitle/bubble/diagram) + scaleアニメーション振動修正
-    e39e49a チェックポイントキャッシュ記法を追加 ← 最新
+    f38d42c チェックポイントキャッシュ記法を追加
+    xxxxxxx キャッシュ再設計: policy/quality方式 + signatureベース ← 最新（未コミット）
 
 ============================================================
 2. 主要クラスとAPI（全クラス・全ファクトリ関数の一覧と説明）
@@ -73,12 +74,10 @@
     VideoView        ... split()で生成。映像系(Transform/Effect)のみ受け付けるビュー
     AudioView        ... split()で生成。音声系(AudioEffect)のみ受け付けるビュー
 
-  ◆ チェックポイントクラス（~演算子/+演算子で生成） 【e39e49aで追加】
-    _CheckpointTransform  ... Transform/TransformChainのチェックポイントラッパー
-                              mode="auto"(~) or "make"(+)
-    _CheckpointEffect     ... Effect/EffectChainのチェックポイントラッパー
-                              mode="auto"(~) or "make"(+)
+  ◆ 内部クラス
     _DisabledAudioEffect  ... AudioEffect/AudioEffectChainの無効化ラッパー（~で生成）
+    ※ _CheckpointTransform/_CheckpointEffect は廃止。
+      policy/qualityはTransform/Effectの属性として統合。
 
   ◆ アンカー/同期クラス
     _AnchorMarker    ... anchor()で生成。タイムライン上の位置を記録（非描画）
@@ -194,22 +193,25 @@
     move(...) & scale(...) & fade(...)   → EffectChain
     again(0.8) & afade(lambda u: u)      → AudioEffectChain
 
-  ◆ ~ チェックポイント演算子 (auto) 【e39e49aで変更】
-    ~resize(...)       → _CheckpointTransform(mode="auto")
-    ~scale(...)        → _CheckpointEffect(mode="auto")
-    ~(tf1 | tf2)       → TransformChain 末尾にautoチェックポイント付与
-    ~(eff1 & eff2)     → EffectChain 末尾にautoチェックポイント付与
-    ※ autoモード: キャッシュが存在すれば再利用、なければ生成
+  ◆ ~ quality演算子 (fast) 【破壊的変更】
+    ~resize(...)       → Transform(quality="fast")  低品質で高速キャッシュ
+    ~scale(...)        → Effect(quality="fast")
+    ~(tf1 | tf2)       → TransformChain 全opにquality="fast"付与
+    ~(eff1 & eff2)     → EffectChain 全opにquality="fast"付与
 
-  ◆ + チェックポイント演算子 (make) 【e39e49aで追加】
-    +resize(...)       → _CheckpointTransform(mode="make")
-    +scale(...)        → _CheckpointEffect(mode="make")
-    +(tf1 | tf2)       → TransformChain 末尾にmakeチェックポイント付与
-    ※ makeモード: 常に再生成
+  ◆ + policy演算子 (force) 【意味変更】
+    +resize(...)       → Transform(policy="force")  常に再生成
+    +scale(...)        → Effect(policy="force")
+    +(tf1 | tf2)       → TransformChain 末尾にpolicy="force"付与
 
-  ◆ - 演算子 (禁止) 【e39e49aで追加】
-    -resize(...)       → TypeError("Transform に - 演算子は使えません")
-    -scale(...)        → TypeError("Effect に - 演算子は使えません")
+  ◆ - policy演算子 (off) 【新規】
+    -resize(...)       → Transform(policy="off")  キャッシュ対象から除外
+    -scale(...)        → Effect(policy="off")
+    -(tf1 | tf2)       → TransformChain 末尾にpolicy="off"付与
+
+  ◆ 無印 (auto+final) 【デフォルト】
+    resize(...)        → Transform(policy="auto", quality="final")
+    最右のbakeable opがRAA保存点として自動キャッシュ対象
 
   ◆ ~ AudioEffect無効化 (従来動作を維持)
     ~again(...)        → _DisabledAudioEffect（Object.__le__でスキップ）
@@ -244,69 +246,70 @@
     p.layer("maku.py", cache="auto")   ... 存在時利用/なければ通常
     p.layer("maku.py", cache="off")    ... 従来通り（デフォルト）
 
-  ◆ 単体キャッシュ (Object.cache)
-    cached = obj.cache("cache.png")    ... 透過PNG出力
-    cached = obj.cache("cache.mp4")    ... 動画出力
-    cached.time(5) <= move(...) & scale(...)
+  ◆ 単体キャッシュ (Object.cache) 【非推奨】
+    cached = obj.cache("cache.png")    ... 透過PNG出力（DeprecationWarning）
+    cached = obj.cache("cache.mp4")    ... 動画出力（DeprecationWarning）
+    → policy/qualityベースのチェックポイントを使用すべき
 
 ============================================================
-4. チェックポイントキャッシュ 【e39e49aで追加】
+4. チェックポイントキャッシュ 【全面再設計: policy/quality方式】
 ============================================================
 
   ◆ 概要
-    Transform/Effectチェーン内の中間生成物を自動保存・復元する仕組み。
-    ~ (auto) / + (make) の単項演算子でチェックポイントを指定し、
-    __cache__/checkpoints/ 以下にPNG(画像) / WebM(動画VP9 alpha)で保存する。
-    既存の obj.cache(path) は明示保存として残る。チェックポイントは内部自動キャッシュ。
+    bakeable ops（Transform全般 + scale/fade/trim Effect）の中間結果を
+    signatureベースで自動保存・復元する仕組み。
+    保存点はRAA+FSPで最小化。
+    _CheckpointTransform/_CheckpointEffectクラスは廃止し、
+    Transform/Effect自身にpolicy/quality属性を持たせる方式に変更。
 
-  ◆ 使用例
-    obj = Object("image.png")
-    obj <= ~resize(sx=0.3, sy=0.3)       # resize適用後のPNGをチェックポイント保存
-    obj.time(3) <= move(x=0.5, y=0.5, anchor="center") \
-                   & scale(lambda u: lerp(0.8, 1, u))
-    # → resize済みPNGをキャッシュ、次回は復元してscale+moveのみ実行
+  ◆ policy/quality属性
+    Transform/Effectの__init__にkeyword-only引数として追加:
+    - policy: "auto"(デフォルト) / "force"(+op) / "off"(-op)
+    - quality: "final"(デフォルト) / "fast"(~op)
 
-  ◆ autoモード (~op)
-    キャッシュが存在すれば再利用、存在しなければ生成。
-    2回目以降のレンダリングが高速化される。
-    ~resize(...), ~scale(...), ~fade(...) 等、全Transform/Effectに使用可能。
+  ◆ 演算子の意味 【破壊的変更】
+    ~op  → quality="fast" の新Transform/Effect返却（旧: autoチェックポイント）
+    +op  → policy="force" の新Transform/Effect返却（旧: makeチェックポイント）
+    -op  → policy="off" の新Transform/Effect返却（旧: TypeError）
+    無印 → policy="auto", quality="final"（RAA保存点として自動キャッシュ対象）
 
-  ◆ makeモード (+op)
-    常に再生成。キャッシュを強制更新する場合に使用。
-    +resize(...), +scale(...) 等。
+  ◆ チェーンの糖衣構文
+    ~(tf1 | tf2)     → 全opにquality="fast"付与
+    +(tf1 | tf2)     → 末尾opにpolicy="force"付与
+    -(tf1 | tf2)     → 末尾opにpolicy="off"付与
 
-  ◆ 糖衣構文 (チェーン全体への適用)
-    ~(tf1 | tf2 | tf3)   → tf1 | tf2 | ~tf3（末尾にautoチェックポイント）
-    +(eff1 & eff2)        → eff1 & +eff2（末尾にmakeチェックポイント）
+  ◆ bakeable判定 (_is_bakeable)
+    Transform → 全てbakeable
+    Effect → scale/fade/trim のみbakeable
+    move/delete → non-bakeable
 
-  ◆ キャッシュ保存先
-    __cache__/checkpoints/ ディレクトリ以下
-    ファイル名はソースパス + 適用済みops列のSHA256ハッシュ先頭16文字
-    画像→ .png、動画（effectあり）→ .webm (VP9 alpha)
+  ◆ 保存点計算 (_compute_save_points)
+    FSP: policy="force" かつ bakeable の全位置
+    RAA: bakeable ops中の最右 policy="auto"（最後のFSP以降にforceがなければ）
+    policy="off" は候補から除外
+
+  ◆ 活性化条件
+    bakeable ops が1つ以上ある全Object（無印=autoのみでもRAA保存）
+    全opがpolicy="off"のObjectはスキップ
+
+  ◆ キャッシュ保存先 【パス変更】
+    __cache__/artifacts/checkpoint/{src_hash[:8]}/{signature[:16]}.{ext}
+    signature = FFP(source) + OPFP + quality + engine_ver + dur? + fps?
+    画像→.png、動画→.webm (video入力 + transform-only でもwebm)
 
   ◆ 復元ロジック (_find_resume_point)
-    ~ (auto) のチェックポイントのみ復元対象。
-    + (make) より左側の ~ のみが復元候補。
-    右端から探索し、キャッシュファイルが存在する最右の~を復元点とする。
+    最左forceの手前のauto保存点のみresume候補。
+    右から探索し、キャッシュファイルが存在する最右のautoを復元点とする。
+
+  ◆ quality="fast"の効果
+    動画チェックポイント: crf=40（通常crf=30）で低品質高速エンコード
 
   ◆ dry_run時の動作
-    _collect_checkpoint_cmds() でffmpegコマンドを収集。
-    obj.source をチェックポイントパスに差し替え。
-    返り値: {"main": [...], "cache": {"__cache__/checkpoints/KEY.ext": [...]}}
-
-  ◆ 実行時の動作
-    _ensure_checkpoints() → _process_checkpoints() で各Objectを処理。
-    チェックポイント地点でffmpegを実行して中間結果を保存。
-    obj.source を最後のチェックポイントに差し替え、残余opsを再設定。
+    全Objectで _collect_checkpoint_cmds() → {"main": [...], "cache": {...}}
+    bakeable opsを持つ全Objectがcheckpoint出力に含まれる
 
   ◆ AudioEffectは対象外
-    AudioEffectの ~ は従来通り無効化(_DisabledAudioEffect)として動作。
-    チェックポイントは映像Transform/Effectのみ。
-
-  ◆ 破壊的変更: ~演算子の意味変更
-    旧: ~op → 無効化（Object.__le__でスキップ）
-    新: ~op → autoチェックポイント（中間結果を保存・復元）
-    ※ AudioEffectの~は無効化のまま変更なし
+    AudioEffectの ~ は従来通り無効化(_DisabledAudioEffect)として動作
 
 ============================================================
 5. テンプレート機能
@@ -333,7 +336,8 @@
 
   処理フロー:
     scene.html + data → Playwright(renderFrame) → PNGシーケンス
-    → ffmpeg → __cache__/webclip/name.webm → Object(video)として合成
+    → ffmpeg → __cache__/artifacts/web/{name}/{signature}.webm → Object(video)として合成
+    signatureベースでキャッシュ判定（テンプレートFFP + data_hash + dur + fps + size + engine_ver）
 
 ============================================================
 7. 音声機能（AudioEffect、amix、adelay、split、delete/adelete）
@@ -391,60 +395,73 @@
 ============================================================
 
   ◆ スナップショットテスト (test_snapshot.py) - 22テスト
-    test01〜test21: 既存テスト（全PASS）
-    test22: チェックポイントキャッシュテスト                   3秒 black   【NEW】
-      - ~resize(sx=0.3, sy=0.3) でPNGチェックポイント保存
-      - チェックポイントPNGからscale+moveでメインパイプライン
+    test01〜test21: 全スナップショット再生成済み（RAA保存でdict形式に変更）
+    test22: チェックポイントキャッシュテスト（+resize → forceポリシー）
 
-  ◆ エラーケーステスト (test_errors.py) - 22テスト
+  ◆ エラーケーステスト (test_errors.py) - 26テスト
     1〜19: 既存テスト
-    20. -Transform                → TypeError                   【NEW】
-    21. -Effect                   → TypeError                   【NEW】
-    22. ~chain糖衣                → 末尾_CheckpointTransform検証 【NEW】
+    20. -Transform                → policy="off" 確認（旧TypeError→変更）
+    21. -Effect                   → policy="off" 確認（旧TypeError→変更）
+    22. ~chain糖衣                → 全opがquality="fast" 確認（旧_CheckpointTransform→変更）
+    23. +force演算子              → policy="force" 確認           【NEW】
+    24. -off演算子                → policy="off" 確認             【NEW】
+    25. ~fast品質                 → quality="fast" 確認           【NEW】
+    26. +chain force              → 末尾policy="force" 確認       【NEW】
 
-  ※ 全テスト test01〜22 + スナップショット22件 + エラーケース22件 全PASS確認済み
+  ※ 全テスト test01〜22 + スナップショット22件 + エラーケース26件 全PASS確認済み
 
 ============================================================
-11. 最新コミット (e39e49a) の変更内容
+11. 最新変更の内容（キャッシュ再設計）
 ============================================================
 
-  コミットメッセージ:
-    チェックポイントキャッシュ記法を追加: ~op(auto) / +op(make) で
-    Transform/Effect中間結果を自動保存・復元
+  ◆ 破壊的変更: 演算子意味の全面変更
+    旧: ~op=autoチェックポイント, +op=makeチェックポイント, -op=TypeError
+    新: ~op=quality:fast, +op=policy:force, -op=policy:off, 無印=auto+final
+    _CheckpointTransform/_CheckpointEffectクラスは廃止
 
-  ◆ _DisabledTransform/_DisabledEffect → _CheckpointTransform/_CheckpointEffect
-    - 旧: ~op で無効化ラッパー生成、Object.__le__でスキップ
-    - 新: ~op でautoチェックポイントラッパー生成、中間結果をキャッシュ
-    - _DisabledAudioEffect は変更なし（AudioEffectの~は無効化のまま）
+  ◆ Transform/Effect にpolicy/quality属性追加
+    - __init__(name, *, policy="auto", quality="final", **params)
+    - _copy(**overrides)メソッドで属性コピー付き新インスタンス生成
+    - __invert__ (~): quality="fast"
+    - __pos__ (+): policy="force"
+    - __neg__ (-): policy="off"
 
-  ◆ Transform/Effect に演算子追加
-    - __invert__ (~): autoチェックポイント
-    - __pos__ (+): makeチェックポイント
-    - __neg__ (-): TypeError
+  ◆ TransformChain/EffectChain の演算子変更
+    - ~chain: 全opにquality="fast"付与（旧: 末尾のみ）
+    - +chain: 末尾opにpolicy="force"
+    - -chain: 末尾opにpolicy="off"（新規）
 
-  ◆ TransformChain/EffectChain の糖衣構文
-    - ~(chain): 末尾要素にautoチェックポイント付与
-    - +(chain): 末尾要素にmakeチェックポイント付与
+  ◆ チェックポイント処理の全面書き換え
+    - _compute_save_points(): RAA+FSP方式で保存点を最小化
+    - _checkpoint_cache_path(): signatureベースのパス計算
+      パス: artifacts/checkpoint/{src_hash[:8]}/{signature[:16]}.ext
+    - _build_unified_ops(): 2-tuple (type, op) に簡素化
+    - _process_checkpoints(): 保存点のみでcheckpoint生成
+    - _find_resume_point(): force地点より左のauto保存点のみresume候補
+    - _ensure_checkpoints(): bakeable ops判定で活性化
+    - _collect_checkpoint_cmds(): save_pointsベースで再構築
 
-  ◆ チェックポイント処理関数群
-    - _checkpoint_cache_path(): SHA256ハッシュベースのキャッシュパス計算
-    - _build_unified_ops(): transforms+effectsを統合ops列に変換
-    - _build_checkpoint_image_cmd(): 画像チェックポイント(PNG)のffmpegコマンド
-    - _build_checkpoint_video_cmd(): 動画チェックポイント(WebM VP9 alpha)のffmpegコマンド
-    - _process_checkpoints(): 実レンダ時の前方実行+チェックポイント保存
-    - _find_resume_point(): autoチェックポイントの復元点探索
-    - _ensure_checkpoints(): 全Objectのチェックポイント処理
-    - _collect_checkpoint_cmds(): dry_run用コマンド収集
+  ◆ Web Object signatureキャッシュ
+    - _web_cache_path(): テンプレートFFP + data + dur + fps + size + engine_ver
+    - パス: artifacts/web/{name}/{signature}.webm
+    - _build_web_cmd(): webm_path引数を追加
 
-  ◆ render()統合
-    - dry_run: _collect_checkpoint_cmds()追加
-    - 実行: _ensure_checkpoints() を _ensure_web_objects() の前に追加
+  ◆ Layer signatureキャッシュ
+    - _layer_cache_paths(filename, project): signatureベースのパス計算
+    - パス: artifacts/layer/{basename}/{signature}.webm|.anchors.json
+    - 全呼び出し元(6箇所)を更新
 
-  ◆ テスト
-    - test22_checkpoint.py 新規テストレイヤー
-    - test_snapshot.py に test22 追加（22テスト）
-    - test_errors.py に3ケース追加（22テスト）
-    - test13.json スナップショット更新（~fadeの意味変更に伴う）
+  ◆ Plan passでレイヤーキャッシュ不使用
+    - _plan_resolve(): 常に_exec_layer実行
+
+  ◆ Object.cache()非推奨化
+    - DeprecationWarning追加
+
+  ◆ テスト更新
+    - test_errors.py: 4テスト追加（26テスト）
+    - test22_checkpoint.py: ~resize → +resize に変更
+    - test15: signatureベースのダミーキャッシュパス生成
+    - 全22スナップショット再生成
 
 ============================================================
 12. 既知の制限・注意事項
@@ -461,11 +478,12 @@
   9. amixのnormalize=0固定
   10. f-string内にバックスラッシュは使えない
   11. web Object は Playwright が必要
-  12. web Object のキャッシュ判定は webm の存在のみ
+  12. web Object のキャッシュ判定はsignatureベースのwebm存在チェック
   13. eval_at()は基本的な数学関数のみ対応
   14. テンプレートHTMLの座標系は正規化値(0.0〜1.0)
-  15. ~演算子の意味変更: Transform/Effectでは無効化→チェックポイントに変更
-      AudioEffectの~は無効化のまま
+  15. ~演算子の意味: Transform/Effectではquality="fast"、AudioEffectでは無効化
+  16. Object.cache()は非推奨。policy/qualityベースのチェックポイントを使用すべき
+  17. 既存スクリプトの~resizeはquality:fastに意味が変わる（破壊的変更）
 
 ============================================================
 ■ 素材ファイル (変更禁止)

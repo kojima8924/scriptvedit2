@@ -379,44 +379,152 @@ _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
 
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
+_ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
+_ENGINE_VER = "1"
+_BAKEABLE_EFFECTS = {"scale", "fade", "trim"}
 
 
-def _checkpoint_cache_path(original_source, ops, duration=None, fps=None):
-    """チェックポイントのキャッシュファイルパスを計算"""
+def _file_fingerprint(path):
+    """ファイルの(絶対パス, サイズ, mtime_ns)タプルを返す"""
+    abs_path = os.path.abspath(path).replace("\\", "/")
+    stat = os.stat(path)
+    return (abs_path, stat.st_size, stat.st_mtime_ns)
+
+
+def _op_fingerprint_str(op):
+    """単一opのフィンガープリント文字列を生成"""
+    parts = [op.name]
+    for k in sorted(op.params):
+        v = op.params[k]
+        parts.append(f"{k}={v.to_ffmpeg('u') if isinstance(v, Expr) else repr(v)}")
+    policy = getattr(op, 'policy', 'auto')
+    quality = getattr(op, 'quality', 'final')
+    parts.append(f"p={policy}")
+    parts.append(f"q={quality}")
+    return "|".join(parts)
+
+
+def _op_prefix_fingerprint(ops_list):
+    """ops列のSHA256[:16]フィンガープリントを計算"""
+    sigs = []
+    for typ, op in ops_list:
+        sigs.append(f"{typ}:{_op_fingerprint_str(op)}")
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    return key
+
+
+def _is_bakeable(op_type, op):
+    """opがbakeable（チェックポイント保存対象）かどうか判定"""
+    if op_type == "transform":
+        return True
+    if op_type == "effect" and op.name in _BAKEABLE_EFFECTS:
+        return True
+    return False
+
+
+def _compute_save_points(ops):
+    """保存点を計算: FSP(forceの全位置) + RAA(最右auto、force以降になければ)
+    ops: [(type, op), ...]
+    戻り値: set of indices
+    """
+    save_points = set()
+    # FSP: policy="force" の全位置（bakeableかつforce）
+    force_indices = []
+    for i, (typ, op) in enumerate(ops):
+        if getattr(op, 'policy', 'auto') == "force" and _is_bakeable(typ, op):
+            save_points.add(i)
+            force_indices.append(i)
+
+    # RAA: bakeable ops中の最右 policy="auto"（最後のFSP以降にforceがなければ）
+    last_force = max(force_indices) if force_indices else -1
+    raa_candidate = None
+    for i, (typ, op) in enumerate(ops):
+        policy = getattr(op, 'policy', 'auto')
+        if policy == "auto" and _is_bakeable(typ, op) and policy != "off":
+            raa_candidate = i
+    # RAAはFSP以降にforceがない場合のみ有効（= 最後のforce以降にautoがある場合）
+    if raa_candidate is not None and raa_candidate > last_force:
+        save_points.add(raa_candidate)
+
+    return save_points
+
+
+def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, quality="final"):
+    """チェックポイントのキャッシュファイルパスを計算（signature方式）"""
     sigs = [original_source.replace("\\", "/")]
-    for typ, inner, mode in ops:
-        parts = [inner.name]
-        for k in sorted(inner.params):
-            v = inner.params[k]
-            parts.append(f"{k}={v.to_ffmpeg('u') if isinstance(v, Expr) else repr(v)}")
-        sigs.append("|".join(parts))
+    opfp = _op_prefix_fingerprint(ops)
+    sigs.append(opfp)
+    sigs.append(f"q={quality}")
+    sigs.append(f"ev={_ENGINE_VER}")
     if duration is not None:
         sigs.append(f"dur={duration}")
     if fps is not None:
         sigs.append(f"fps={fps}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
-    ext = ".webm" if duration is not None else ".png"
-    return os.path.join(_CHECKPOINT_DIR, f"{key}{ext}")
+    # video入力 + transform-only でも動画ならwebm
+    is_video = _detect_media_type(original_source) in ("video",)
+    ext = ".webm" if (duration is not None or is_video) else ".png"
+    src_hash = hashlib.sha256(original_source.replace("\\", "/").encode()).hexdigest()[:8]
+    cache_dir = os.path.join(_ARTIFACT_DIR, "checkpoint", src_hash)
+    return os.path.join(cache_dir, f"{key}{ext}")
 
 
 def _build_unified_ops(obj):
-    """transforms + effects を統合ops列に変換"""
+    """transforms + effects を統合ops列に変換（2-tuple: type, op）"""
     ops = []
     for t in obj.transforms:
-        if isinstance(t, _CheckpointTransform):
-            ops.append(("transform", t.inner, t.mode))
-        else:
-            ops.append(("transform", t, None))
+        ops.append(("transform", t))
     for e in obj.effects:
-        if isinstance(e, _CheckpointEffect):
-            ops.append(("effect", e.inner, e.mode))
-        else:
-            ops.append(("effect", e, None))
+        ops.append(("effect", e))
     return ops
 
 
-def _layer_cache_paths(filename):
+def _web_cache_path(obj, project):
+    """Web Objectのsignatureベースキャッシュパスを計算"""
+    sigs = []
+    # テンプレートファイルのフィンガープリント
+    try:
+        ffp = _file_fingerprint(obj._web_source)
+        sigs.append(f"ffp={ffp}")
+    except (OSError, TypeError):
+        sigs.append(f"src={obj._web_source}")
+    # データハッシュ
+    data_str = json.dumps(obj._web_data, sort_keys=True, default=str)
+    sigs.append(f"data={hashlib.sha256(data_str.encode()).hexdigest()[:12]}")
+    sigs.append(f"dur={obj.duration}")
+    fps = obj._web_fps or project.fps
+    sigs.append(f"fps={fps}")
+    if obj._web_size:
+        sigs.append(f"size={obj._web_size[0]}x{obj._web_size[1]}")
+    sigs.append(f"ev={_ENGINE_VER}")
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    name = obj._web_name or "web"
+    return os.path.join(_ARTIFACT_DIR, "web", name, f"{key}.webm")
+
+
+def _layer_cache_paths(filename, project=None):
+    """レイヤーキャッシュパスを計算（signature方式）"""
     basename = os.path.splitext(os.path.basename(filename))[0]
+    if project is not None:
+        # signatureベース
+        sigs = []
+        try:
+            ffp = _file_fingerprint(filename)
+            sigs.append(f"ffp={ffp}")
+        except (OSError, TypeError):
+            sigs.append(f"src={filename}")
+        sigs.append(f"ev={_ENGINE_VER}")
+        sigs.append(f"w={project.width}")
+        sigs.append(f"h={project.height}")
+        sigs.append(f"fps={project.fps}")
+        sigs.append(f"bg={project.background_color}")
+        dur = project.duration or 0
+        sigs.append(f"dur={dur}")
+        key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+        layer_dir = os.path.join(_ARTIFACT_DIR, "layer", basename)
+        return (os.path.join(layer_dir, f"{key}.webm"),
+                os.path.join(layer_dir, f"{key}.anchors.json"))
+    # フォールバック（後方互換）
     return (os.path.join(_CACHE_DIR, f"{basename}.webm"),
             os.path.join(_CACHE_DIR, f"{basename}.anchors.json"))
 
@@ -577,8 +685,7 @@ class Project:
             # web Objectのsourceを予定webmパスに仮差し替え
             for obj in self.objects:
                 if isinstance(obj, Object) and obj.media_type == "web":
-                    name = obj._web_name
-                    obj.source = os.path.join(_CACHE_DIR, "webclip", f"{name}.webm")
+                    obj.source = _web_cache_path(obj, self)
                     obj.media_type = "video"
             cmd = self._build_ffmpeg_cmd(output_path)
             all_extra = {}
@@ -612,10 +719,8 @@ class Project:
             self._layers = []
             self._mode = "plan"
             for spec in self._layer_specs:
-                if self._should_use_cache(spec):
-                    self._load_cached_layer(spec)
-                else:
-                    self._exec_layer(spec["filename"], spec["priority"])
+                # Plan passではレイヤーキャッシュを使わず常に実行
+                self._exec_layer(spec["filename"], spec["priority"])
             self._resolve_anchors(check_unresolved=False)
             if self._anchors == old_anchors and iteration > 0:
                 converged = True
@@ -654,7 +759,7 @@ class Project:
         """cache='use' のファイル存在チェック"""
         for spec in self._layer_specs:
             if spec["cache"] == "use":
-                webm_path, json_path = _layer_cache_paths(spec["filename"])
+                webm_path, json_path = _layer_cache_paths(spec["filename"], self)
                 if not os.path.exists(webm_path):
                     raise FileNotFoundError(
                         f"キャッシュファイルが見つかりません: {webm_path}\n"
@@ -668,13 +773,13 @@ class Project:
         if cache == "use":
             return True
         if cache == "auto":
-            webm_path, _ = _layer_cache_paths(spec["filename"])
+            webm_path, _ = _layer_cache_paths(spec["filename"], self)
             return os.path.exists(webm_path)
         return False  # off, make
 
     def _load_cached_layer(self, spec):
         """キャッシュからObject生成 + anchors.jsonマージ"""
-        webm_path, json_path = _layer_cache_paths(spec["filename"])
+        webm_path, json_path = _layer_cache_paths(spec["filename"], self)
         start_idx = len(self.objects)
         # キャッシュwebmをObjectとして生成
         cached_obj = Object.__new__(Object)
@@ -735,11 +840,11 @@ class Project:
                 if spec["cache"] == "make" or spec["cache"] == "auto":
                     if spec["cache"] == "make":
                         cmd = self._build_layer_cache_cmd(i)
-                        webm_path, _ = _layer_cache_paths(spec["filename"])
+                        webm_path, _ = _layer_cache_paths(spec["filename"], self)
                         cache_cmds[webm_path] = cmd
         return cache_cmds
 
-    def _build_checkpoint_image_cmd(self, source, transforms, cache_path):
+    def _build_checkpoint_image_cmd(self, source, transforms, cache_path, quality="final"):
         """画像チェックポイント: Transform適用→透過PNG"""
         filters = []
         for t in transforms:
@@ -754,7 +859,7 @@ class Project:
         return cmd
 
     def _build_checkpoint_video_cmd(self, source, media_type, transforms, effects,
-                                     cache_path, dur, fps):
+                                     cache_path, dur, fps, quality="final"):
         """動画チェックポイント: Transform+Effect適用→透明VP9"""
         cmd = ["ffmpeg", "-y"]
         if media_type == "image":
@@ -779,9 +884,10 @@ class Project:
         if filters:
             cmd.extend(["-vf", ",".join(filters)])
 
+        crf = "40" if quality == "fast" else "30"
         cmd.extend([
             "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
-            "-b:v", "0", "-crf", "30", "-auto-alt-ref", "0",
+            "-b:v", "0", "-crf", crf, "-auto-alt-ref", "0",
             "-t", str(dur), cache_path,
         ])
         return cmd
@@ -789,8 +895,16 @@ class Project:
     def _process_checkpoints(self, obj):
         """1つのObjectのチェックポイント処理（実レンダ）"""
         ops = _build_unified_ops(obj)
-        checkpoints = [(i, ops[i]) for i in range(len(ops)) if ops[i][2] is not None]
-        if not checkpoints:
+        # bakeable ops があるか確認
+        has_bakeable = any(_is_bakeable(typ, op) for typ, op in ops)
+        if not has_bakeable:
+            return
+        # 全opがpolicy="off"ならスキップ
+        if all(getattr(op, 'policy', 'auto') == "off" for _, op in ops):
+            return
+
+        save_points = _compute_save_points(ops)
+        if not save_points:
             return
 
         original_source = obj.source
@@ -799,7 +913,7 @@ class Project:
         fps = self.fps
 
         # 復元点チェック
-        resume_idx, resume_path = self._find_resume_point(original_source, ops, dur, fps)
+        resume_idx, resume_path = self._find_resume_point(original_source, ops, dur, fps, save_points)
         if resume_idx is not None:
             current_source = resume_path
             current_media_type = _detect_media_type(resume_path)
@@ -809,34 +923,38 @@ class Project:
             current_media_type = original_media_type
             remaining_ops = list(ops)
 
-        # 前方実行: チェックポイント保存
+        # 前方実行: 保存点でのみチェックポイント生成
         executed = ops[:len(ops) - len(remaining_ops)]
         pos = 0
         while pos < len(remaining_ops):
-            typ, inner, mode = remaining_ops[pos]
-            if mode is not None:
+            global_idx = len(executed) + pos
+            if global_idx in save_points:
+                typ, op = remaining_ops[pos]
                 segment_ops = executed + remaining_ops[:pos + 1]
-                has_effects = any(t == "effect" for t, _, _ in segment_ops)
-                cp_dur = dur if has_effects else None
-                cp_fps = fps if has_effects else None
+                has_effects = any(t == "effect" for t, _ in segment_ops)
+                is_video = _detect_media_type(original_source) in ("video",)
+                cp_dur = dur if (has_effects or is_video) else None
+                cp_fps = fps if cp_dur is not None else None
+                quality = getattr(op, 'quality', 'final')
                 cache_path = _checkpoint_cache_path(
-                    original_source, segment_ops, cp_dur, cp_fps)
+                    original_source, segment_ops, cp_dur, cp_fps, quality)
 
-                need_render = (mode == "make") or not os.path.exists(cache_path)
+                policy = getattr(op, 'policy', 'auto')
+                need_render = (policy == "force") or not os.path.exists(cache_path)
                 if need_render:
                     local_ops = remaining_ops[:pos + 1]
-                    local_transforms = [inner for t, inner, _ in local_ops if t == "transform"]
-                    local_effects = [inner for t, inner, _ in local_ops if t == "effect"]
+                    local_transforms = [op for t, op in local_ops if t == "transform"]
+                    local_effects = [op for t, op in local_ops if t == "effect"]
 
-                    os.makedirs(_CHECKPOINT_DIR, exist_ok=True)
+                    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
                     if cp_dur is None:
                         cmd = self._build_checkpoint_image_cmd(
-                            current_source, local_transforms, cache_path)
+                            current_source, local_transforms, cache_path, quality)
                     else:
                         cmd = self._build_checkpoint_video_cmd(
                             current_source, current_media_type,
                             local_transforms, local_effects,
-                            cache_path, cp_dur, fps)
+                            cache_path, cp_dur, fps, quality)
                     print(f"チェックポイント保存: {cache_path}")
                     subprocess.run(cmd, check=True)
 
@@ -851,36 +969,49 @@ class Project:
         # Objectを更新: source差し替え、残余opsを再設定
         obj.source = current_source
         obj.media_type = current_media_type
-        obj.transforms = [inner for t, inner, _ in remaining_ops if t == "transform"]
-        obj.effects = [inner for t, inner, _ in remaining_ops if t == "effect"]
+        obj.transforms = [op for t, op in remaining_ops if t == "transform"]
+        obj.effects = [op for t, op in remaining_ops if t == "effect"]
 
-    def _find_resume_point(self, original_source, ops, duration, fps):
-        """最右の有効な~チェックポイント（+より左側のみ）を探す"""
-        seen_plus = False
-        valid_autos = []
-        for i, (typ, inner, mode) in enumerate(ops):
-            if mode == "make":
-                seen_plus = True
-            elif mode == "auto" and not seen_plus:
-                valid_autos.append(i)
+    def _find_resume_point(self, original_source, ops, duration, fps, save_points):
+        """force地点より左のauto保存点のみresume候補"""
+        # 最左force位置
+        first_force = None
+        for i, (typ, op) in enumerate(ops):
+            if getattr(op, 'policy', 'auto') == "force" and _is_bakeable(typ, op):
+                first_force = i
+                break
+        boundary = (first_force - 1) if first_force is not None else len(ops) - 1
 
-        cp_dur = duration if any(t == "effect" for t, _, _ in ops) else None
-        cp_fps = fps if cp_dur is not None else None
-        for idx in reversed(valid_autos):
-            path = _checkpoint_cache_path(original_source, ops[:idx+1], cp_dur, cp_fps)
+        # boundary以下のauto保存点を右から探索
+        candidates = sorted([i for i in save_points
+                            if i <= boundary and getattr(ops[i][1], 'policy', 'auto') == "auto"],
+                           reverse=True)
+
+        has_effects = any(t == "effect" for t, _ in ops)
+        is_video = _detect_media_type(original_source) in ("video",)
+        for idx in candidates:
+            segment_ops = ops[:idx + 1]
+            cp_dur = duration if (has_effects or is_video) else None
+            cp_fps = fps if cp_dur is not None else None
+            quality = getattr(ops[idx][1], 'quality', 'final')
+            path = _checkpoint_cache_path(original_source, segment_ops, cp_dur, cp_fps, quality)
             if os.path.exists(path):
                 return idx, path
         return None, None
 
     def _ensure_checkpoints(self):
-        """全Objectのチェックポイント処理"""
+        """bakeable opsを持つ全Objectのチェックポイント処理"""
         for obj in self.objects:
             if not isinstance(obj, Object):
                 continue
-            has_cp = (any(isinstance(t, _CheckpointTransform) for t in obj.transforms) or
-                      any(isinstance(e, _CheckpointEffect) for e in obj.effects))
-            if has_cp:
-                self._process_checkpoints(obj)
+            ops = _build_unified_ops(obj)
+            has_bakeable = any(_is_bakeable(typ, op) for typ, op in ops)
+            if not has_bakeable:
+                continue
+            # 全opがpolicy="off"ならスキップ
+            if all(getattr(op, 'policy', 'auto') == "off" for _, op in ops):
+                continue
+            self._process_checkpoints(obj)
 
     def _collect_checkpoint_cmds(self):
         """dry_run用: 全チェックポイントコマンドを収集"""
@@ -889,8 +1020,14 @@ class Project:
             if not isinstance(obj, Object):
                 continue
             ops = _build_unified_ops(obj)
-            checkpoints = [i for i, op in enumerate(ops) if op[2] is not None]
-            if not checkpoints:
+            has_bakeable = any(_is_bakeable(typ, op) for typ, op in ops)
+            if not has_bakeable:
+                continue
+            if all(getattr(op, 'policy', 'auto') == "off" for _, op in ops):
+                continue
+
+            save_points = _compute_save_points(ops)
+            if not save_points:
                 continue
 
             original_source = obj.source
@@ -899,54 +1036,64 @@ class Project:
             current_source = original_source
             current_media_type = obj.media_type
 
-            for cp_idx in checkpoints:
-                segment_ops = ops[:cp_idx + 1]
-                has_effects = any(t == "effect" for t, _, _ in segment_ops)
-                cp_dur = dur if has_effects else None
-                cp_fps = fps if has_effects else None
+            sorted_sps = sorted(save_points)
+            for sp_idx in sorted_sps:
+                segment_ops = ops[:sp_idx + 1]
+                has_effects = any(t == "effect" for t, _ in segment_ops)
+                is_video = _detect_media_type(original_source) in ("video",)
+                cp_dur = dur if (has_effects or is_video) else None
+                cp_fps = fps if cp_dur is not None else None
+                op = ops[sp_idx][1]
+                quality = getattr(op, 'quality', 'final')
                 cache_path = _checkpoint_cache_path(
-                    original_source, segment_ops, cp_dur, cp_fps)
+                    original_source, segment_ops, cp_dur, cp_fps, quality)
 
                 # current_source → checkpoint のコマンド構築
                 local_ops_start = 0
-                prev_cps = [j for j in checkpoints if j < cp_idx]
-                if prev_cps:
-                    local_ops_start = prev_cps[-1] + 1
-                    prev_seg = ops[:prev_cps[-1] + 1]
-                    prev_has_eff = any(t == "effect" for t, _, _ in prev_seg)
+                prev_sps = [j for j in sorted_sps if j < sp_idx]
+                if prev_sps:
+                    local_ops_start = prev_sps[-1] + 1
+                    prev_seg = ops[:prev_sps[-1] + 1]
+                    prev_op = ops[prev_sps[-1]][1]
+                    prev_has_eff = any(t == "effect" for t, _ in prev_seg)
+                    prev_is_video = _detect_media_type(original_source) in ("video",)
                     current_source = _checkpoint_cache_path(
                         original_source, prev_seg,
-                        dur if prev_has_eff else None,
-                        fps if prev_has_eff else None)
+                        dur if (prev_has_eff or prev_is_video) else None,
+                        fps if (prev_has_eff or prev_is_video) else None,
+                        getattr(prev_op, 'quality', 'final'))
                     current_media_type = _detect_media_type(current_source)
 
-                local_ops = ops[local_ops_start:cp_idx + 1]
-                local_transforms = [inner for t, inner, _ in local_ops if t == "transform"]
-                local_effects = [inner for t, inner, _ in local_ops if t == "effect"]
+                local_ops = ops[local_ops_start:sp_idx + 1]
+                local_transforms = [op for t, op in local_ops if t == "transform"]
+                local_effects = [op for t, op in local_ops if t == "effect"]
 
                 if cp_dur is None:
                     cmd = self._build_checkpoint_image_cmd(
-                        current_source, local_transforms, cache_path)
+                        current_source, local_transforms, cache_path, quality)
                 else:
                     cmd = self._build_checkpoint_video_cmd(
                         current_source, current_media_type,
                         local_transforms, local_effects,
-                        cache_path, cp_dur, fps)
+                        cache_path, cp_dur, fps, quality)
                 cmds[cache_path] = cmd
 
-            # Object source差し替え（最後のチェックポイント）
-            last_cp = checkpoints[-1]
-            last_seg = ops[:last_cp + 1]
-            last_has_eff = any(t == "effect" for t, _, _ in last_seg)
+            # Object source差し替え（最後の保存点）
+            last_sp = sorted_sps[-1]
+            last_seg = ops[:last_sp + 1]
+            last_op = ops[last_sp][1]
+            last_has_eff = any(t == "effect" for t, _ in last_seg)
+            last_is_video = _detect_media_type(original_source) in ("video",)
             last_path = _checkpoint_cache_path(
                 original_source, last_seg,
-                dur if last_has_eff else None,
-                fps if last_has_eff else None)
+                dur if (last_has_eff or last_is_video) else None,
+                fps if (last_has_eff or last_is_video) else None,
+                getattr(last_op, 'quality', 'final'))
             obj.source = last_path
             obj.media_type = _detect_media_type(last_path)
-            remaining = ops[last_cp + 1:]
-            obj.transforms = [inner for t, inner, _ in remaining if t == "transform"]
-            obj.effects = [inner for t, inner, _ in remaining if t == "effect"]
+            remaining = ops[last_sp + 1:]
+            obj.transforms = [op for t, op in remaining if t == "transform"]
+            obj.effects = [op for t, op in remaining if t == "effect"]
 
         return cmds
 
@@ -955,9 +1102,8 @@ class Project:
         cmds = {}
         for obj in self.objects:
             if isinstance(obj, Object) and obj.media_type == "web":
-                name = obj._web_name
-                webm_path = os.path.join(_CACHE_DIR, "webclip", f"{name}.webm")
-                cmds[webm_path] = obj._build_web_cmd(self)
+                webm_path = _web_cache_path(obj, self)
+                cmds[webm_path] = obj._build_web_cmd(self, webm_path)
         return cmds
 
     def _ensure_web_objects(self):
@@ -965,16 +1111,16 @@ class Project:
         for obj in self.objects:
             if not isinstance(obj, Object) or obj.media_type != "web":
                 continue
+            webm_path = _web_cache_path(obj, self)
             name = obj._web_name
             cache_dir = os.path.join(_CACHE_DIR, "webclip")
-            webm_path = os.path.join(cache_dir, f"{name}.webm")
             frames_dir = os.path.join(cache_dir, f"{name}_frames")
 
             if not os.path.exists(webm_path):
                 print(f"Webクリップ生成: {obj.source}")
                 obj._render_web_frames(self)
-                cmd = obj._build_web_cmd(self)
-                os.makedirs(cache_dir, exist_ok=True)
+                cmd = obj._build_web_cmd(self, webm_path)
+                os.makedirs(os.path.dirname(webm_path), exist_ok=True)
                 print(f"  ffmpeg {' '.join(cmd[1:])}")
                 subprocess.run(cmd, check=True)
                 print(f"  完了: {webm_path}")
@@ -995,7 +1141,7 @@ class Project:
     def _build_layer_cache_cmd(self, spec_index):
         """レイヤーキャッシュ用ffmpegコマンド（透明webm VP9 alpha）"""
         spec = self._layer_specs[spec_index]
-        webm_path, _ = _layer_cache_paths(spec["filename"])
+        webm_path, _ = _layer_cache_paths(spec["filename"], self)
         objects, anchors = self._get_layer_data(spec_index)
         renderable = [o for o in objects if isinstance(o, Object)]
 
@@ -1070,8 +1216,8 @@ class Project:
     def _render_layer_to_cache(self, spec_index):
         """レイヤーキャッシュ生成実行"""
         spec = self._layer_specs[spec_index]
-        webm_path, json_path = _layer_cache_paths(spec["filename"])
-        os.makedirs(_CACHE_DIR, exist_ok=True)
+        webm_path, json_path = _layer_cache_paths(spec["filename"], self)
+        os.makedirs(os.path.dirname(webm_path), exist_ok=True)
 
         cmd = self._build_layer_cache_cmd(spec_index)
         print(f"キャッシュ生成: {webm_path}")
@@ -1464,24 +1610,23 @@ class TransformChain:
             return TransformChain(self.transforms + [other])
         if isinstance(other, TransformChain):
             return TransformChain(self.transforms + other.transforms)
-        if isinstance(other, _CheckpointTransform):
-            return TransformChain(self.transforms + [other])
         return NotImplemented
 
     def __invert__(self):
-        """~(tf1 | tf2 | tf3) → tf1 | tf2 | ~tf3"""
-        new_list = list(self.transforms)
-        last = new_list[-1]
-        inner = last.inner if isinstance(last, _CheckpointTransform) else last
-        new_list[-1] = _CheckpointTransform(inner, "auto")
+        """~(tf1 | tf2 | tf3) → chain内全opに quality='fast' 付与"""
+        new_list = [t._copy(quality="fast") for t in self.transforms]
         return TransformChain(new_list)
 
     def __pos__(self):
-        """+(tf1 | tf2 | tf3) → tf1 | tf2 | +tf3"""
+        """+(tf1 | tf2 | tf3) → 末尾opに policy='force'"""
         new_list = list(self.transforms)
-        last = new_list[-1]
-        inner = last.inner if isinstance(last, _CheckpointTransform) else last
-        new_list[-1] = _CheckpointTransform(inner, "make")
+        new_list[-1] = new_list[-1]._copy(policy="force")
+        return TransformChain(new_list)
+
+    def __neg__(self):
+        """-(tf1 | tf2 | tf3) → 末尾opに policy='off'"""
+        new_list = list(self.transforms)
+        new_list[-1] = new_list[-1]._copy(policy="off")
         return TransformChain(new_list)
 
     def __repr__(self):
@@ -1499,74 +1644,27 @@ class EffectChain:
             return EffectChain(self.effects + [other])
         if isinstance(other, EffectChain):
             return EffectChain(self.effects + other.effects)
-        if isinstance(other, _CheckpointEffect):
-            return EffectChain(self.effects + [other])
         return NotImplemented
 
     def __invert__(self):
-        """~(eff1 & eff2) → eff1 & ~eff2"""
-        new_list = list(self.effects)
-        last = new_list[-1]
-        inner = last.inner if isinstance(last, _CheckpointEffect) else last
-        new_list[-1] = _CheckpointEffect(inner, "auto")
+        """~(eff1 & eff2) → chain内全opに quality='fast' 付与"""
+        new_list = [e._copy(quality="fast") for e in self.effects]
         return EffectChain(new_list)
 
     def __pos__(self):
-        """+(eff1 & eff2) → eff1 & +eff2"""
+        """+(eff1 & eff2) → 末尾opに policy='force'"""
         new_list = list(self.effects)
-        last = new_list[-1]
-        inner = last.inner if isinstance(last, _CheckpointEffect) else last
-        new_list[-1] = _CheckpointEffect(inner, "make")
+        new_list[-1] = new_list[-1]._copy(policy="force")
+        return EffectChain(new_list)
+
+    def __neg__(self):
+        """-(eff1 & eff2) → 末尾opに policy='off'"""
+        new_list = list(self.effects)
+        new_list[-1] = new_list[-1]._copy(policy="off")
         return EffectChain(new_list)
 
     def __repr__(self):
         return f"EffectChain({self.effects})"
-
-
-class _CheckpointTransform:
-    """checkpoint付きTransform"""
-    def __init__(self, inner, mode):  # mode: "auto" or "make"
-        self.inner = inner  # Transform
-        self.mode = mode
-        self.name = inner.name if hasattr(inner, 'name') else None
-        self.params = inner.params if hasattr(inner, 'params') else {}
-
-    def __or__(self, other):
-        if isinstance(other, (Transform, _CheckpointTransform)):
-            return TransformChain([self, other])
-        if isinstance(other, TransformChain):
-            return TransformChain([self] + other.transforms)
-        return NotImplemented
-
-    def __ror__(self, other):
-        if isinstance(other, Transform):
-            return TransformChain([other, self])
-        if isinstance(other, TransformChain):
-            return TransformChain(other.transforms + [self])
-        return NotImplemented
-
-
-class _CheckpointEffect:
-    """checkpoint付きEffect"""
-    def __init__(self, inner, mode):
-        self.inner = inner
-        self.mode = mode
-        self.name = inner.name if hasattr(inner, 'name') else None
-        self.params = inner.params if hasattr(inner, 'params') else {}
-
-    def __and__(self, other):
-        if isinstance(other, (Effect, _CheckpointEffect)):
-            return EffectChain([self, other])
-        if isinstance(other, EffectChain):
-            return EffectChain([self] + other.effects)
-        return NotImplemented
-
-    def __rand__(self, other):
-        if isinstance(other, Effect):
-            return EffectChain([other, self])
-        if isinstance(other, EffectChain):
-            return EffectChain(other.effects + [self])
-        return NotImplemented
 
 
 class AudioEffect:
@@ -1636,9 +1734,17 @@ class _DisabledAudioEffect:
 
 
 class Transform:
-    def __init__(self, name, **params):
+    def __init__(self, name, *, policy="auto", quality="final", **params):
         self.name = name
         self.params = params
+        self.policy = policy
+        self.quality = quality
+
+    def _copy(self, **overrides):
+        """属性をコピーした新Transformを返す"""
+        kw = dict(policy=self.policy, quality=self.quality, **self.params)
+        kw.update(overrides)
+        return Transform(self.name, **kw)
 
     def __or__(self, other):
         """Transform | Transform/TransformChain → TransformChain"""
@@ -1646,29 +1752,36 @@ class Transform:
             return TransformChain([self, other])
         if isinstance(other, TransformChain):
             return TransformChain([self] + other.transforms)
-        if isinstance(other, _CheckpointTransform):
-            return TransformChain([self, other])
         return NotImplemented
 
     def __invert__(self):
-        """~op → auto checkpoint"""
-        return _CheckpointTransform(self, "auto")
+        """~op → quality='fast'"""
+        return self._copy(quality="fast")
 
     def __pos__(self):
-        """+op → make checkpoint"""
-        return _CheckpointTransform(self, "make")
+        """+op → policy='force'"""
+        return self._copy(policy="force")
 
     def __neg__(self):
-        raise TypeError("Transform に - 演算子は使えません")
+        """-op → policy='off'"""
+        return self._copy(policy="off")
 
     def __repr__(self):
         return f"Transform({self.name}, {self.params})"
 
 
 class Effect:
-    def __init__(self, name, **params):
+    def __init__(self, name, *, policy="auto", quality="final", **params):
         self.name = name
         self.params = params
+        self.policy = policy
+        self.quality = quality
+
+    def _copy(self, **overrides):
+        """属性をコピーした新Effectを返す"""
+        kw = dict(policy=self.policy, quality=self.quality, **self.params)
+        kw.update(overrides)
+        return Effect(self.name, **kw)
 
     def __and__(self, other):
         """Effect & Effect/EffectChain → EffectChain"""
@@ -1676,20 +1789,19 @@ class Effect:
             return EffectChain([self, other])
         if isinstance(other, EffectChain):
             return EffectChain([self] + other.effects)
-        if isinstance(other, _CheckpointEffect):
-            return EffectChain([self, other])
         return NotImplemented
 
     def __invert__(self):
-        """~op → auto checkpoint"""
-        return _CheckpointEffect(self, "auto")
+        """~op → quality='fast'"""
+        return self._copy(quality="fast")
 
     def __pos__(self):
-        """+op → make checkpoint"""
-        return _CheckpointEffect(self, "make")
+        """+op → policy='force'"""
+        return self._copy(policy="force")
 
     def __neg__(self):
-        raise TypeError("Effect に - 演算子は使えません")
+        """-op → policy='off'"""
+        return self._copy(policy="off")
 
     def __repr__(self):
         return f"Effect({self.name}, {self.params})"
@@ -1819,14 +1931,10 @@ class Object:
         """<= 演算子: Transform/Effect/AudioEffect等を適用"""
         if isinstance(rhs, _DisabledAudioEffect):
             return self  # AudioのDisableだけ残す
-        if isinstance(rhs, _CheckpointTransform):
-            self.transforms.append(rhs)
-        elif isinstance(rhs, Transform):
+        if isinstance(rhs, Transform):
             self.transforms.append(rhs)
         elif isinstance(rhs, TransformChain):
-            self.transforms.extend(rhs.transforms)  # _CheckpointTransform含む
-        elif isinstance(rhs, _CheckpointEffect):
-            self.effects.append(rhs)
+            self.transforms.extend(rhs.transforms)
         elif isinstance(rhs, Effect):
             if rhs.name == "delete":
                 self._video_deleted = True
@@ -1834,9 +1942,7 @@ class Object:
                 self.effects.append(rhs)
         elif isinstance(rhs, EffectChain):
             for e in rhs.effects:
-                if isinstance(e, _CheckpointEffect):
-                    self.effects.append(e)
-                elif e.name == "delete":
+                if e.name == "delete":
                     self._video_deleted = True
                 else:
                     self.effects.append(e)
@@ -1886,7 +1992,12 @@ class Object:
         return cached
 
     def cache(self, path, *, overwrite=True, bg=None, fps=None):
-        """単体レンダしてキャッシュファイルを生成、そのファイルを sourceに持つ新Objectを返す"""
+        """単体レンダしてキャッシュファイルを生成、そのファイルを sourceに持つ新Objectを返す
+        非推奨: policy/qualityベースのチェックポイントを使用してください"""
+        warnings.warn(
+            "Object.cache() は非推奨です。"
+            "+op (policy='force') によるチェックポイントを使用してください。",
+            DeprecationWarning, stacklevel=2)
         proj = Project._current
         if proj is None:
             raise RuntimeError("cache()にはアクティブなProjectが必要です")
@@ -1937,11 +2048,12 @@ class Object:
                     result = result / rate
         return result
 
-    def _build_web_cmd(self, project):
+    def _build_web_cmd(self, project, webm_path=None):
         """webクリップ用ffmpegコマンド"""
         cache_dir = os.path.join(_CACHE_DIR, "webclip")
         name = self._web_name
-        webm_path = os.path.join(cache_dir, f"{name}.webm")
+        if webm_path is None:
+            webm_path = _web_cache_path(self, project)
         frames_dir = os.path.join(cache_dir, f"{name}_frames")
         frames_pattern = os.path.join(frames_dir, "frame_%05d.png")
         fps = self._web_fps or project.fps
@@ -2009,8 +2121,7 @@ class VideoView:
 
     def __le__(self, rhs):
         """映像系のみ受け入れ"""
-        if isinstance(rhs, (Transform, TransformChain, Effect, EffectChain,
-                           _CheckpointTransform, _CheckpointEffect)):
+        if isinstance(rhs, (Transform, TransformChain, Effect, EffectChain)):
             self._clip.__le__(rhs)
             return self
         raise TypeError(f"VideoView <= には映像系のみ: {type(rhs)}")

@@ -162,30 +162,34 @@ def setup_test14():
 
 def setup_test15():
     """cache='use' テスト: ダミーキャッシュからの読み込み"""
-    cache_dir = os.path.join(os.path.dirname(__file__), "__cache__")
-    os.makedirs(cache_dir, exist_ok=True)
+    from scriptvedit import _layer_cache_paths
+    # まずProjectを作って正しいキャッシュパスを計算
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="darkblue")
+    dummy_webm, dummy_json = _layer_cache_paths("test14_maku.py", p)
+    os.makedirs(os.path.dirname(dummy_webm), exist_ok=True)
     # ダミーwebmファイル（空でよい、dry_runなので実行されない）
-    dummy_webm = os.path.join(cache_dir, "test14_maku.webm")
     with open(dummy_webm, "wb") as f:
         f.write(b"\x00")
     # anchors.json
-    dummy_json = os.path.join(cache_dir, "test14_maku.anchors.json")
     with open(dummy_json, "w", encoding="utf-8") as f:
         json.dump({"duration": 3.0, "anchors": {"curtain_done": 3.0}}, f)
     try:
-        p = Project()
-        p.configure(width=1280, height=720, fps=30, background_color="darkblue")
-        p.layer("test14_maku.py", priority=0, cache="use")
-        p.layer("test14_oni.py", priority=1)
-        return p.render("test15.mp4", dry_run=True)
+        p2 = Project()
+        p2.configure(width=1280, height=720, fps=30, background_color="darkblue")
+        p2.layer("test14_maku.py", priority=0, cache="use")
+        p2.layer("test14_oni.py", priority=1)
+        return p2.render("test15.mp4", dry_run=True)
     finally:
         # ダミーファイル削除
         if os.path.exists(dummy_webm):
             os.unlink(dummy_webm)
         if os.path.exists(dummy_json):
             os.unlink(dummy_json)
-        if os.path.exists(cache_dir) and not os.listdir(cache_dir):
-            os.rmdir(cache_dir)
+        # クリーンアップ
+        parent = os.path.dirname(dummy_webm)
+        if os.path.exists(parent) and not os.listdir(parent):
+            os.rmdir(parent)
 
 
 def setup_test16():
