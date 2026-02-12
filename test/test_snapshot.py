@@ -268,7 +268,7 @@ def setup_test24():
 
 
 def setup_test25():
-    """video + transform-only + time未指定 → obj.length()でduration補完"""
+    """time()省略 → auto duration（加工後長: trim(3)反映で duration=3）"""
     p = Project()
     p.configure(width=1280, height=720, fps=30, background_color="black")
     p.layer("test25_video_no_time.py", priority=0)
@@ -297,6 +297,22 @@ def setup_test28():
     p.configure(width=1280, height=720, fps=30, background_color="black")
     p.layer("test28_rotate_to.py", priority=0)
     return p.render("test28.mp4", dry_run=True)
+
+
+def setup_test29():
+    """web + bakeable (scale/fade) テスト: web変換後にcheckpointが正しく動作"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test29_web_bakeable.py", priority=0)
+    return p.render("test29.mp4", dry_run=True)
+
+
+def setup_test30():
+    """sin scale中間最大padテスト: 11点サンプリングで正しいpadサイズ"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test30_sin_scale.py", priority=0)
+    return p.render("test30.mp4", dry_run=True)
 
 
 ALL_TESTS = [
@@ -328,6 +344,8 @@ ALL_TESTS = [
     ("test26", setup_test26),
     ("test27", setup_test27),
     ("test28", setup_test28),
+    ("test29", setup_test29),
+    ("test30", setup_test30),
 ]
 
 

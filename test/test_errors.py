@@ -617,6 +617,61 @@ def test_rotate_to_preserves_move():
             os.unlink(temp_path)
 
 
+def test_morph_to_hint_message():
+    """morph_to末尾でないときエラーに「回避策」が含まれる"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'img1 = Object("../onigiri_tenmusu.png")\n'
+        'img2 = Object("../figure_cafe.png")\n'
+        'img1.time(3) <= morph_to(img2)\n'
+        'img1 <= scale(0.5)\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_morph_hint.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=320, height=240, fps=1, background_color="black")
+        p.layer(temp_path, priority=0)
+        p.render("_tmp_morph_hint.mp4", dry_run=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "回避策" in msg and "除外" in msg:
+            return True, msg.split('\n')[0]
+        return False, f"メッセージに回避策がない: {msg}"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_image_time_no_args():
+    """画像に対する time() 省略は TypeError"""
+    try:
+        obj = Object("../onigiri_tenmusu.png")
+        obj.time()
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "画像" in msg and "time()" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_probe_failure_has_audio_false():
+    """probe不可時 has_audio=False"""
+    old = Project._current
+    try:
+        Project._current = None
+        obj = Object("nonexistent_media.mp4")
+        result = obj.has_audio
+        if result is False:
+            return True, f"has_audio={result} (probe不可→False)"
+        return False, f"has_audio={result} (期待: False)"
+    finally:
+        Project._current = old
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -654,6 +709,9 @@ ALL_TESTS = [
     ("rotate引数なし", test_rotate_no_args),
     ("rotate_to引数なし", test_rotate_to_no_args),
     ("rotate_to move保持", test_rotate_to_preserves_move),
+    ("morph_to回避策メッセージ", test_morph_to_hint_message),
+    ("probe不可has_audio=False", test_probe_failure_has_audio_false),
+    ("画像time()省略", test_image_time_no_args),
 ]
 
 

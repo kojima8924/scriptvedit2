@@ -39,6 +39,7 @@ obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
 
 - **Transform** (`|` で連結、`<=` で適用): 1回だけ適用される空間変換
   - `resize(sx, sy)` ... サイズ変更
+  - `rotate(deg=N)` / `rotate(rad=N)` ... 回転（静的）
 
 - **Effect** (`&` で連結、`<=` で適用): float で定数、lambda(u) でアニメーション
   - `move(x, y, anchor)` ... 配置位置（固定 or from/toアニメーション）
@@ -46,6 +47,8 @@ obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
   - `scale(lambda u: lerp(0.5, 1, u))` ... 0.5倍 → 等倍にアニメーション
   - `fade(0.5)` ... 定数 半透明
   - `fade(lambda u: u)` ... 透明 → 不透明にアニメーション
+  - `rotate_to(from_deg, to_deg)` ... 回転アニメーション（bakeable）
+  - `morph_to(target_obj)` ... 画像→画像モーフィング（bakeable、重い。bakeable opsの末尾に配置必須）
 
 `u` は正規化時間（0〜1）。Effectの表示開始から終了まで線形に変化する。
 
@@ -131,6 +134,10 @@ AudioEffectの `~` は従来通り無効化として動作する。
 ### Object.cache()（非推奨）
 
 `Object.cache(path)` は非推奨です。policy/qualityベースのチェックポイントを使用してください。
+
+### 方針: genchain は提供しない
+
+生成系（morph_to等）のチェーン化は行わない。生成系Effectは単体でのみ使用する。
 
 ### anchor / pause / until（クロスレイヤー同期）
 
@@ -218,6 +225,18 @@ bg.time(6) <= move(x=0.5, y=0.5, anchor="center") \
               & fade(lambda u: u)
 ```
 
+### time() の省略（auto duration）
+
+動画/音声では `time()` の引数を省略すると、加工後の長さ `length()` で duration を自動決定する。
+ただし呼び出し時に即 `length()` はせず、layer exec 後に確定されるため、
+同じ行で `trim` 等を付けても正しく反映される。
+
+```python
+clip.time() <= trim(3)                     # duration=3（加工後長）
+bgm.time() <= atrim(2) & again(0.6)       # duration=2
+img.time()                                 # TypeError（画像は length を持たない）
+```
+
 ### 実行
 
 ```
@@ -236,9 +255,9 @@ cmd = p.render("output.mp4", dry_run=True)
 
 ```
 cd test
-python test_snapshot.py        # スナップショットテスト（22テスト）
+python test_snapshot.py        # スナップショットテスト（30テスト）
 python test_snapshot.py --update  # スナップショット更新
-python test_errors.py          # エラーケーステスト（26テスト）
+python test_errors.py          # エラーケーステスト（39テスト）
 python test01_main.py          # 個別テスト（MP4生成）
 ```
 

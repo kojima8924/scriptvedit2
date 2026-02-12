@@ -13,7 +13,7 @@
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/fb1ebc85/de568b3fddb430aa.webm",
+    "__cache__/artifacts/checkpoint/3f5085fb/4e8636f6d147e8c8.webm",
     "-c:v",
     "libvpx-vp9",
     "-i",
@@ -25,7 +25,7 @@
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/4c68636e/a6e11b13cb462b91.webm",
+    "__cache__/artifacts/checkpoint/07d8e998/0d9d045c46c71806.webm",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,8)'[v1];[v1][2:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,2.5)'[v2];[v2][3:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,2.5/,4.5)'[v3];[v3][4:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,4.5/,7.0)'[v4];[v4][5:v]overlay=(W-w)/2:(H-h)/2:enable='between(t/,0/,1.0)'[v5]",
     "-map",
@@ -149,11 +149,11 @@
       "8",
       "__cache__/artifacts/checkpoint/e1cffaed/5c1f9785a9a49ea9.webm"
     ],
-    "__cache__/artifacts/checkpoint/fb1ebc85/de568b3fddb430aa.webm": [
+    "__cache__/artifacts/checkpoint/3f5085fb/4e8636f6d147e8c8.webm": [
       "ffmpeg",
       "-y",
       "-i",
-      "C:/code/scriptvedit2/templates/subtitle.html",
+      "__cache__/artifacts/web/subtitle_b10b1471/f55d7f6263ebb6af.webm",
       "-vf",
       "format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip((0.0+((1.0-0.0)*clip((T-0)/2.5/,0/,1)))/,0/,1)'",
       "-c:v",
@@ -168,13 +168,13 @@
       "0",
       "-t",
       "2.5",
-      "__cache__/artifacts/checkpoint/fb1ebc85/de568b3fddb430aa.webm"
+      "__cache__/artifacts/checkpoint/3f5085fb/4e8636f6d147e8c8.webm"
     ],
-    "__cache__/artifacts/checkpoint/4c68636e/a6e11b13cb462b91.webm": [
+    "__cache__/artifacts/checkpoint/07d8e998/0d9d045c46c71806.webm": [
       "ffmpeg",
       "-y",
       "-i",
-      "C:/code/scriptvedit2/templates/bubble.html",
+      "__cache__/artifacts/web/bubble_2042e1cb/b56c7393fe794059.webm",
       "-vf",
       "scale=w='trunc(iw*((0.8+((1.0-0.8)*clip((t-0)/1.0/,0/,1))))/2)*2':h='trunc(ih*((0.8+((1.0-0.8)*clip((t-0)/1.0/,0/,1))))/2)*2':eval=frame",
       "-c:v",
@@ -189,7 +189,7 @@
       "0",
       "-t",
       "1.0",
-      "__cache__/artifacts/checkpoint/4c68636e/a6e11b13cb462b91.webm"
+      "__cache__/artifacts/checkpoint/07d8e998/0d9d045c46c71806.webm"
     ]
   }
 }

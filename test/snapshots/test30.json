@@ -9,7 +9,7 @@
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/07fb9cc9/764cf70bba0382b4.webm",
+    "__cache__/artifacts/checkpoint/2fdb2eec/ce7514545a8d6c8a.webm",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1]",
     "-map",
@@ -21,16 +21,20 @@
     "-an",
     "-t",
     "3",
-    "test25.mp4"
+    "test30.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/07fb9cc9/764cf70bba0382b4.webm": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/ce7514545a8d6c8a.webm": [
       "ffmpeg",
       "-y",
+      "-loop",
+      "1",
+      "-r",
+      "30",
       "-i",
-      "../fox_noaudio.mp4",
+      "../onigiri_tenmusu.png",
       "-vf",
-      "trim=duration=3,setpts=PTS-STARTPTS,scale=iw*0.5:ih*0.5",
+      "scale=iw*0.3:ih*0.3,scale=w='trunc(iw*((1+(0.5*sin((clip((t-0)/3/,0/,1)*3.141592653589793)))))/2)*2':h='trunc(ih*((1+(0.5*sin((clip((t-0)/3/,0/,1)*3.141592653589793)))))/2)*2':eval=frame,format=rgba,pad=290:360:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame",
       "-c:v",
       "libvpx-vp9",
       "-pix_fmt",
@@ -43,7 +47,7 @@
       "0",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/07fb9cc9/764cf70bba0382b4.webm"
+      "__cache__/artifacts/checkpoint/2fdb2eec/ce7514545a8d6c8a.webm"
     ]
   }
 }

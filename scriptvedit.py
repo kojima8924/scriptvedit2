@@ -513,10 +513,13 @@ def _validate_morph_position(bakeable_ops):
         return
     # morph_to の後に他のbakeable opがあればエラー
     for i in range(morph_idx + 1, len(bakeable_ops)):
+        after_op = bakeable_ops[i][1]
         raise ValueError(
             f"morph_to はbakeable opsの末尾に配置してください。"
             f"morph_to(idx={morph_idx})の後に "
-            f"{bakeable_ops[i][1].name}(idx={i})があります。")
+            f"{after_op.name}(idx={i})があります。\n"
+            f"回避策: {after_op.name} を morph_to の前に移動するか、"
+            f"-{after_op.name}(...) で checkpoint対象から除外してください。")
 
 
 def _build_unified_ops(obj):
@@ -675,7 +678,17 @@ class Project:
         self._layers.append((start_idx, end_idx, priority))
         for obj in self.objects[start_idx:end_idx]:
             obj.priority = priority
+        self._fill_auto_durations(start_idx, end_idx)
         self._current_layer_file = None
+
+    def _fill_auto_durations(self, start_idx, end_idx):
+        """duration_auto=Trueのオブジェクトにlength()でdurationを確定"""
+        for obj in self.objects[start_idx:end_idx]:
+            if (isinstance(obj, Object)
+                    and obj._duration_auto
+                    and obj.duration is None
+                    and obj._until_anchor is None):
+                obj.duration = obj.length()
 
     def _calc_total_duration(self):
         """各レイヤーの最大durationを返す"""
@@ -746,12 +759,12 @@ class Project:
         if dry_run:
             cache_cmds = self._collect_cache_cmds()
             web_cmds = self._collect_web_cmds()
-            checkpoint_cmds = self._collect_checkpoint_cmds()
-            # web Objectのsourceを予定webmパスに仮差し替え
+            # web Objectのsourceを予定webmパスに仮差し替え（checkpoint収集より前）
             for obj in self.objects:
                 if isinstance(obj, Object) and obj.media_type == "web":
                     obj.source = _web_cache_path(obj, self)
                     obj.media_type = "video"
+            checkpoint_cmds = self._collect_checkpoint_cmds()
             cmd = self._build_ffmpeg_cmd(output_path)
             all_extra = {}
             if cache_cmds:
@@ -764,8 +777,8 @@ class Project:
                 return {"main": cmd, "cache": all_extra}
             return cmd  # 後方互換: cache不要ならlistのまま
 
-        self._ensure_checkpoints()
         self._ensure_web_objects()
+        self._ensure_checkpoints()
         cmd = self._build_ffmpeg_cmd(output_path)
         print(f"実行コマンド:")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
@@ -1594,9 +1607,7 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
             # pad: scaleの出力を最大サイズの固定フレームに収め、overlay位置を安定化
             if base_dims and base_dims[0] is not None:
                 bw, bh = base_dims
-                s0 = scale_expr.eval_at(0)
-                s1 = scale_expr.eval_at(1)
-                max_s = _builtins.max(s0, s1)
+                max_s = _builtins.max(scale_expr.eval_at(i / 10) for i in range(11))
                 max_w = _math.ceil(bw * max_s / 2) * 2
                 max_h = _math.ceil(bh * max_s / 2) * 2
                 filters.append("format=rgba")
@@ -1965,6 +1976,7 @@ class Object:
         self.effects = []
         self.audio_effects = []
         self.duration = None
+        self._duration_auto = False
         self.start_time = 0
         self.priority = 0
         self.media_type = _detect_media_type(source)
@@ -2038,12 +2050,20 @@ class Object:
                 if info:
                     self._has_audio = info.get("has_audio", False)
                     return self._has_audio
-            return True  # probe不可→True想定
+            return False  # probe不可→音声なしと推定（安全側）
         return self._has_audio
 
-    def time(self, duration):
-        """表示時間を設定"""
-        self.duration = duration
+    def time(self, duration=None):
+        """表示時間を設定。省略時は加工後長(length())で自動決定（layer exec後に確定）"""
+        if duration is None:
+            if self.media_type == "image":
+                raise TypeError(
+                    "画像には time() 省略は使えません。time(seconds) を指定してください。")
+            self.duration = None
+            self._duration_auto = True
+        else:
+            self.duration = duration
+            self._duration_auto = False
         return self
 
     def until(self, name):
