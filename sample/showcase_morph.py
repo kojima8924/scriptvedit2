@@ -4,8 +4,8 @@ from scriptvedit import *
 src = Object("nigaoe_franz_kafka.png")
 tgt = Object("mushi_tentoumushi.png")
 
-src.time(5) <= morph_to(tgt) \
-    & -scale(0.25) \
+src.time(7.5) <= morph_to(tgt, max_pixels=4000) \
+    & -scale(0.5) \
     & move(
         x=apply_easing(ease_out_cubic, 0.35, 0.65),
         y=0.82,

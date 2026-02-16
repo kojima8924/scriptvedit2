@@ -211,12 +211,20 @@ def slide_closing():
 def watermark():
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    font = _jp(20)
-    text = "Made with scriptvedit"
+    font = _jp(26, bold=True)
+    text = "この動画はscriptveditで制作されました"
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
-    # 右下に半透明テキスト
-    draw.text((W - tw - 30, H - 45), text, fill=(200, 200, 220, 160), font=font)
+    th = bbox[3] - bbox[1]
+    # 右上に角丸矩形 + テキスト
+    pad_x, pad_y = 18, 10
+    rx = W - tw - pad_x * 2 - 24
+    ry = 20
+    draw.rounded_rectangle(
+        [rx, ry, rx + tw + pad_x * 2, ry + th + pad_y * 2],
+        radius=12, fill=(255, 100, 60, 200),
+    )
+    draw.text((rx + pad_x, ry + pad_y), text, fill=(255, 255, 255, 240), font=font)
     img.save(os.path.join(OUT, "watermark.png"))
     print("  watermark.png")
 

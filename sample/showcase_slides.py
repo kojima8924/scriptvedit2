@@ -1,15 +1,15 @@
 from scriptvedit import *
 
-# スライド構成: (ファイル, 表示秒数)
+# スライド構成: HTMLベースのレンダリング (ファイル, 表示秒数)
 SLIDES = [
-    ("slides/slide_01_title.png",    5),
-    ("slides/slide_02_syntax.png",   5),
-    ("slides/slide_03_features.png", 5),
-    ("slides/slide_04_closing.png",  3),
+    ("slides/slide_01_title.html",    7.5),
+    ("slides/slide_02_syntax.html",   7.5),
+    ("slides/slide_03_features.html", 7.5),
+    ("slides/slide_04_closing.html",  4.5),
 ]
 
 for path, dur in SLIDES:
-    s = Object(path)
+    s = Object(path, duration=dur, size=(1920, 1080))
     fi = 0.8 / dur   # フェードイン比率
     fo = 0.8 / dur   # フェードアウト比率
     # ゆっくりズーム + フェードイン/アウト
